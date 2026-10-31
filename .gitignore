@@ -19,3 +19,4 @@ backend/config.json
 *.swp
 .DS_Store
 *.tsbuildinfo
+reports/

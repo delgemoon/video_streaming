@@ -1,5 +1,7 @@
 #include "media/thumbnail.hpp"
 
+#include "media/mxf_fixup.hpp"
+
 #include <format>
 #include <fstream>
 #include <gst/app/gstappsink.h>
@@ -27,6 +29,7 @@ std::expected<void, std::string> generate_thumbnail(const std::filesystem::path&
         if (p) gst_object_unref(p);
         return std::unexpected(msg);
     }
+    install_mxf_h264_fixup(p);
     GstElement* sink = gst_bin_get_by_name(GST_BIN(p), "sink");
     auto cleanup = [&] {
         gst_element_set_state(p, GST_STATE_NULL);

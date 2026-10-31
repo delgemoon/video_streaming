@@ -50,7 +50,7 @@ For NVENC install the NVIDIA driver; `nvh264enc` ships in `gstreamer1.0-plugins-
 
 ```bash
 # backend
-./scripts/build-backend.sh                           # cmake + ninja + unit tests → backend/build/vsp-server
+./scripts/build-backend.sh                           # cmake + ninja + unit tests → backend/build/vsp-server, vsp-probe
 backend/build/vsp-server --data-dir ./data           # http://0.0.0.0:8080
 
 # desktop (in another terminal)
@@ -134,13 +134,45 @@ backend/build/vsp-mp4-tests                     # ISOBMFF parser unit tests
 
 `scripts/electron-cdp-check.mjs` / `electron-cdp-upload.mjs` drive the running Electron app over CDP (`npm run dev -- -- --remote-debugging-port=9333`) to assert real playback and the full upload → live preview → VOD flow.
 
+## `vsp-probe` — media compatibility scanner
+
+Scans files or whole directory trees and tells you which ones the platform can ingest, using the *same* GStreamer probe the server uses. Every file is probed in its own child process, so a crashing demuxer only fails that file instead of the scan.
+
+```bash
+backend/build/vsp-probe /path/to/archive                 # metadata probe (fast, I/O bound)
+backend/build/vsp-probe -d /path/to/archive              # + decode the first 3 s of each file (catches broken essence)
+backend/build/vsp-probe -p -d --json out.json --csv out.csv /path/to/archive   # only problems, with exports
+backend/build/vsp-probe file1.mxf file2.mov              # individual files
+```
+
+| verdict | meaning |
+|---------|---------|
+| `supported` | transcodes as-is |
+| `partial` | transcodes with caveats: no audio, interlaced source, >60 fps (capped), >8-bit (output is 8-bit H.264), extra audio/video tracks (first used) |
+| `unsupported` | probe or decode failed — the reason is printed (missing decoder, demuxer crash, corrupt file, timeout) |
+| `not-video` | audio-only essence (Avid/P2 `A01…` sidecars), raw camera frame sequences (`.ari`, `.dng`, `.dpx`…), stills |
+
+The report ends with a per-codec and per-container tally and a ranked list of failure reasons. Exit status is 1 if anything is `unsupported`. Default parallelism is low (2–6) because probing is disk-seek bound; raise `-j` on SSDs.
+
+### Broadcast/pro-format support
+
+Tested against a 129 GB broadcast test corpus (Avid, Panasonic P2, Sony XDCAM/XDCAM-EX, ARRI, Canon, GoPro, FCP exports — see [docs/editshare-compatibility-report.txt](docs/editshare-compatibility-report.txt)). **614 of 614 video files that probe also decode and transcode**: DNxHD, Apple ProRes, AVC-Intra 50/100 (Avid OP-Atom and P2), XDCAM-HD 422, IMX/D-10, DV/DVCPRO, MPEG-2, uncompressed 4:2:2, H.264 (GoPro/Canon/phones), MJPEG/animation.
+
+Two platform fixes came out of that run and apply to the server as well as the probe:
+- **`avdemux_mxf` is preferred over `mxfdemux`** (`src/media/gst_init.cpp`). GStreamer's own MXF demuxer rejects Avid OP-Atom files and aborts on Panasonic P2 index tables.
+- **AVC-Intra caps fix-up** (`src/media/mxf_fixup.cpp`). libav's MXF demuxer advertises AVC-Intra as `stream-format=avc` with Annex-B SPS/PPS in `codec_data`, which `h264parse` refuses; a pad probe rewrites the caps to byte-stream and injects the SPS/PPS in-band.
+
+Still unsupported in that corpus (71 files): Avid 2.8-era JFIF/15:1s MXF, Grass Valley `gfcam` AUDIO/ANC sidecars, a few Avid 10-bit uncompressed OP-Atom clips (`v210` essence key not recognised), Convergent Design 720p50 MOVs with an unknown FourCC, and `dvhp`/`dvhq` (DVCPRO HD in MOV) which has no GStreamer decoder.
+
 ## Project layout
 
 ```
 backend/src/
   core/      config, logging, utils
   storage/   models + SQLite repository
-  media/     encoder_detect · probe (GstDiscoverer) · ladder · mp4_box (ISOBMFF) · cmaf_packager · transcoder · thumbnail
+  media/     gst_init · mxf_fixup · encoder_detect · probe (GstDiscoverer) · ladder · mp4_box (ISOBMFF) · cmaf_packager · transcoder · thumbnail
+backend/tools/
+  probe_main.cpp   vsp-probe compatibility scanner
   jobs/      worker pool running transcode jobs
   http/      Beast coroutine server · router · static file serving (Range) · SSE broker · API handlers
 desktop/src/
@@ -156,3 +188,4 @@ scripts/     setup-ubuntu.sh · build-backend.sh · dev.sh · make-test-clip.sh 
 - LL-HLS blocking playlist reload (`CAN-BLOCK-RELOAD`, `_HLS_msn`) and `EXT-X-PRELOAD-HINT` are not implemented; players poll the playlist.
 - Uploads are single-request (not resumable); disk I/O is synchronous on the HTTP threads (io_uring via `asio::stream_file` is a natural next step).
 - H.264 only; HEVC/AV1 ladders, DASH output, live ingest (RTMP/SRT/WebRTC WHIP) are the next milestones.
+- Interlaced sources are encoded as-is (no deinterlacer in the pipeline yet); >8-bit sources are converted to 8-bit.

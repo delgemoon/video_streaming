@@ -2,6 +2,7 @@
 
 #include <gst/gst.h>
 #include <gst/pbutils/pbutils.h>
+#include <gst/video/video.h>
 #include <spdlog/spdlog.h>
 
 namespace vsp {
@@ -22,6 +23,35 @@ std::string codec_name(GstDiscovererStreamInfo* s) {
         gst_caps_unref(caps);
     }
     return out;
+}
+
+// Bits per component of the decoded video, derived from the codec caps. 0 when unknown.
+// (GstDiscoverer's get_depth() returns the sum over components, which is misleading for 4:4:4.)
+unsigned bits_per_component(GstDiscovererStreamInfo* s) {
+    GstCaps* caps = gst_discoverer_stream_info_get_caps(s);
+    if (!caps) return 0;
+    unsigned depth = 0;
+    const GstStructure* st = gst_caps_get_structure(caps, 0);
+    if (const gchar* fmt = gst_structure_get_string(st, "format")) {
+        GstVideoFormat f = gst_video_format_from_string(fmt);
+        if (const GstVideoFormatInfo* fi = gst_video_format_get_info(f)) depth = GST_VIDEO_FORMAT_INFO_DEPTH(fi, 0);
+    }
+    if (!depth) {
+        int d = 0;
+        if (gst_structure_get_int(st, "bit-depth-luma", &d) && d > 0) depth = static_cast<unsigned>(d);
+    }
+    if (!depth) {
+        // H.264/HEVC profile names carry the depth
+        if (const gchar* prof = gst_structure_get_string(st, "profile")) {
+            std::string p = prof;
+            if (p.find("12") != std::string::npos) depth = 12;
+            else if (p.find("10") != std::string::npos) depth = 10;
+            else if (p.find("main") != std::string::npos || p.find("high") != std::string::npos ||
+                     p.find("baseline") != std::string::npos) depth = 8;
+        }
+    }
+    gst_caps_unref(caps);
+    return depth;
 }
 
 } // namespace
@@ -90,7 +120,12 @@ std::expected<ProbeResult, std::string> probe_file(const std::filesystem::path& 
     GList* vs = gst_discoverer_info_get_video_streams(info);
     for (GList* l = vs; l; l = l->next) {
         auto* v = GST_DISCOVERER_VIDEO_INFO(l->data);
-        if (gst_discoverer_video_info_is_image(v)) continue;
+        if (gst_discoverer_video_info_is_image(v)) {
+            if (!r.has_video) r.image_only = true;
+            continue;
+        }
+        r.image_only = false;
+        ++r.video_streams;
         if (r.has_video) continue;
         r.has_video = true;
         r.width = static_cast<int>(gst_discoverer_video_info_get_width(v));
@@ -98,6 +133,9 @@ std::expected<ProbeResult, std::string> probe_file(const std::filesystem::path& 
         r.fps_n = static_cast<int>(gst_discoverer_video_info_get_framerate_num(v));
         r.fps_d = static_cast<int>(gst_discoverer_video_info_get_framerate_denom(v));
         if (r.fps_d <= 0) r.fps_d = 1;
+        r.interlaced = gst_discoverer_video_info_is_interlaced(v);
+        r.video_depth = bits_per_component(GST_DISCOVERER_STREAM_INFO(v));
+        r.video_bitrate = gst_discoverer_video_info_get_bitrate(v);
         r.video_codec = codec_name(GST_DISCOVERER_STREAM_INFO(v));
     }
     gst_discoverer_stream_info_list_free(vs);
@@ -105,6 +143,7 @@ std::expected<ProbeResult, std::string> probe_file(const std::filesystem::path& 
     GList* as = gst_discoverer_info_get_audio_streams(info);
     for (GList* l = as; l; l = l->next) {
         auto* a = GST_DISCOVERER_AUDIO_INFO(l->data);
+        ++r.audio_streams;
         if (r.has_audio) continue;
         r.has_audio = true;
         r.audio_channels = static_cast<int>(gst_discoverer_audio_info_get_channels(a));
@@ -115,7 +154,8 @@ std::expected<ProbeResult, std::string> probe_file(const std::filesystem::path& 
 
     gst_discoverer_info_unref(info);
 
-    if (!r.has_video) return std::unexpected("no video stream found");
+    if (r.image_only) return std::unexpected("still image, not a video");
+    if (!r.has_video) return std::unexpected(r.has_audio ? "audio-only, no video stream" : "no video stream found");
     if (r.duration_ms <= 0) return std::unexpected("could not determine duration");
     return r;
 }

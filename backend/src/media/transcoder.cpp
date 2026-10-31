@@ -1,6 +1,7 @@
 #include "media/transcoder.hpp"
 
 #include "media/cmaf_packager.hpp"
+#include "media/mxf_fixup.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -184,6 +185,7 @@ std::expected<TranscodeResult, std::string> run_transcode(const TranscodeRequest
     Context ctx;
     gptr<GstElement> pipeline(gst_pipeline_new("transcode"));
     ctx.pipeline = pipeline.get();
+    install_mxf_h264_fixup(ctx.pipeline);
 
     const unsigned part_ms = (req.part_ms == 0 || req.part_ms > req.segment_ms) ? req.segment_ms : req.part_ms;
     double fps = req.probe.fps();

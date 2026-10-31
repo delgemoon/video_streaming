@@ -6,6 +6,7 @@
 #include "http/server.hpp"
 #include "jobs/job_queue.hpp"
 #include "media/encoder_detect.hpp"
+#include "media/gst_init.hpp"
 #include "storage/database.hpp"
 
 #include <boost/asio/io_context.hpp>
@@ -21,7 +22,7 @@ int main(int argc, char** argv) {
     log::init(cfg.log_level);
     spdlog::info("vsp-server {} starting (data dir: {})", VSP_VERSION, cfg.data_dir.string());
 
-    gst_init(nullptr, nullptr);
+    gst_platform_init();
     spdlog::info("GStreamer {}", gst_version_string());
 
     try {

@@ -27,6 +27,8 @@ add_library(vsp_core STATIC
   src/core/config.cpp
   src/core/util.cpp
   src/storage/database.cpp
+  src/media/gst_init.cpp
+  src/media/mxf_fixup.cpp
   src/media/encoder_detect.cpp
   src/media/probe.cpp
   src/media/ladder.cpp
@@ -57,9 +59,12 @@ target_compile_options(vsp_core PUBLIC -Wall -Wextra -Wno-unused-parameter)
 add_executable(vsp-server src/main.cpp)
 target_link_libraries(vsp-server PRIVATE vsp_core)
 
+add_executable(vsp-probe tools/probe_main.cpp)
+target_link_libraries(vsp-probe PRIVATE vsp_core)
+
 add_executable(vsp-mp4-tests tests/mp4_box_tests.cpp)
 target_link_libraries(vsp-mp4-tests PRIVATE vsp_core)
 enable_testing()
 add_test(NAME mp4_box_tests COMMAND vsp-mp4-tests)
 
-install(TARGETS vsp-server RUNTIME DESTINATION bin)
+install(TARGETS vsp-server vsp-probe RUNTIME DESTINATION bin)
