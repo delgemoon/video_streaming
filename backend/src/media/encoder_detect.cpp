@@ -112,21 +112,23 @@ EncoderDetection detect_encoders(const std::string& preference) {
     return det;
 }
 
-void configure_video_encoder(GstElement* enc, const EncoderInfo& info, unsigned bitrate_kbps, int gop_frames) {
+void configure_video_encoder(GstElement* enc, const EncoderInfo& info, unsigned bitrate_kbps, int gop_frames,
+                             bool low_latency) {
     const std::string gop = std::to_string(gop_frames);
     const std::string kbps = std::to_string(bitrate_kbps);
     if (info.element == "nvh264enc") {
-        set_if(enc, "preset", "p4");
-        set_if(enc, "tune", "high-quality");
+        set_if(enc, "preset", low_latency ? "p2" : "p4");
+        set_if(enc, "tune", low_latency ? "low-latency" : "high-quality");
         set_if(enc, "rc-mode", "cbr");
         set_if(enc, "bitrate", kbps);
         set_if(enc, "max-bitrate", std::to_string(bitrate_kbps * 12 / 10));
         set_if(enc, "gop-size", gop);
         set_if(enc, "strict-gop", "true");
-        set_if(enc, "bframes", "2");
-        set_if(enc, "b-adapt", "true");
+        set_if(enc, "bframes", low_latency ? "0" : "2");
+        set_if(enc, "b-adapt", low_latency ? "false" : "true");
         set_if(enc, "spatial-aq", "true");
         set_if(enc, "aq-strength", "8");
+        set_if(enc, "zerolatency", low_latency ? "true" : "false");
         set_if(enc, "repeat-sequence-header", "true");
     } else if (info.element == "vah264enc") {
         set_if(enc, "rate-control", "cbr");
@@ -148,7 +150,12 @@ void configure_video_encoder(GstElement* enc, const EncoderInfo& info, unsigned 
         set_if(enc, "pass", "cbr");
         set_if(enc, "bitrate", kbps);
         set_if(enc, "key-int-max", gop);
-        set_if(enc, "speed-preset", "veryfast");
+        set_if(enc, "speed-preset", low_latency ? "superfast" : "veryfast");
+        if (low_latency) {
+            set_if(enc, "tune", "zerolatency");
+            set_if(enc, "bframes", "0");
+            set_if(enc, "rc-lookahead", "0");
+        }
         set_if(enc, "byte-stream", "false");
         set_if(enc, "threads", "0");
         set_if(enc, "vbv-buf-capacity", "1000");

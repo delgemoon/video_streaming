@@ -61,6 +61,34 @@ struct Video {
     nlohmann::json to_json() const;
 };
 
+enum class LiveStatus { Idle, Live };
+std::string to_string(LiveStatus s);
+LiveStatus live_status_from_string(const std::string& s);
+
+// A persistent ingest endpoint (stream key). Each time a publisher connects, a new recording id
+// is minted; the live output lives in media/<current_video_id>/ and becomes a Video when recorded.
+struct LiveStream {
+    std::string id;
+    std::string name;
+    std::string stream_key;
+    LiveStatus status = LiveStatus::Idle;
+    bool record = true;
+    std::vector<std::string> renditions;     // encoded ABR tiers; empty = server default
+    std::string current_video_id;            // output dir / recording while live
+    std::string last_video_id;               // most recent finished recording
+    std::string publisher;                   // remote address while live
+    int width = 0, height = 0;
+    double fps = 0;
+    std::string video_codec, audio_codec;
+    std::vector<Rendition> live_renditions;  // as published in master.m3u8
+    int64_t started_at = 0, ended_at = 0;
+    int64_t created_at = 0, updated_at = 0;
+    int sessions = 0;                        // number of times it went live
+    std::string error;
+
+    nlohmann::json to_json() const;
+};
+
 enum class JobStatus { Queued, Running, Done, Failed, Cancelled };
 std::string to_string(JobStatus s);
 JobStatus job_status_from_string(const std::string& s);

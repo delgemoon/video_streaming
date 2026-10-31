@@ -4,6 +4,7 @@
 #include "http/events.hpp"
 #include "http/router.hpp"
 #include "jobs/job_queue.hpp"
+#include "live/live_manager.hpp"
 #include "media/encoder_detect.hpp"
 #include "storage/database.hpp"
 
@@ -15,6 +16,7 @@ struct App {
     EventBroker& broker;
     JobQueue& jobs;
     const EncoderDetection& encoders;
+    LiveManager* live = nullptr;   // null when RTMP is disabled
 };
 
 void register_routes(Router& router, App& app);

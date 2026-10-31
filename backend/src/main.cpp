@@ -5,6 +5,9 @@
 #include "http/router.hpp"
 #include "http/server.hpp"
 #include "jobs/job_queue.hpp"
+#include "live/live_manager.hpp"
+#include "live/rtmp/server.hpp"
+#include "http/playlist_registry.hpp"
 #include "media/encoder_detect.hpp"
 #include "media/gst_init.hpp"
 #include "storage/database.hpp"
@@ -13,6 +16,7 @@
 #include <boost/asio/signal_set.hpp>
 #include <gst/gst.h>
 #include <spdlog/spdlog.h>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -40,11 +44,21 @@ int main(int argc, char** argv) {
         jobs.recover_unfinished();
         jobs.start(cfg.effective_jobs(encoders.video.hardware));
 
+        PlaylistRegistry playlists;
+        std::unique_ptr<LiveManager> live;
+        std::unique_ptr<rtmp::Server> rtmp_server;
+        if (cfg.rtmp_enabled) {
+            live = std::make_unique<LiveManager>(cfg, db, broker, encoders, playlists, ioc);
+            live->start();
+            rtmp_server = std::make_unique<rtmp::Server>(ioc, cfg.rtmp_host, cfg.rtmp_port, *live);
+            rtmp_server->start();
+        }
+
         Router router;
-        App app{cfg, db, broker, jobs, encoders};
+        App app{cfg, db, broker, jobs, encoders, live.get()};
         register_routes(router, app);
 
-        HttpServer server(cfg, router, broker, ioc);
+        HttpServer server(cfg, router, broker, playlists, ioc);
         server.start();
 
         boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
@@ -58,6 +72,7 @@ int main(int argc, char** argv) {
         ioc.run();
         for (auto& t : pool) t.join();
 
+        if (live) live->shutdown();
         jobs.stop();
         spdlog::info("bye");
     } catch (const std::exception& e) {

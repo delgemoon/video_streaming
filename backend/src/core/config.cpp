@@ -55,9 +55,12 @@ Config Config::load(int argc, char** argv) {
         else if (a == "--encoder") cfg.encoder = next();
         else if (a == "--jobs") cfg.concurrent_jobs = std::stoul(next());
         else if (a == "--log-level") cfg.log_level = next();
+        else if (a == "--rtmp-port") cfg.rtmp_port = static_cast<uint16_t>(std::stoi(next()));
+        else if (a == "--no-rtmp") cfg.rtmp_enabled = false;
         else if (a == "--help" || a == "-h") {
             std::cout << "vsp-server [--config file.json] [--host H] [--port P] [--data-dir DIR]\n"
-                         "           [--encoder auto|nvenc|vaapi|x264] [--jobs N] [--log-level LVL]\n";
+                         "           [--encoder auto|nvenc|vaapi|x264] [--jobs N] [--log-level LVL]\n"
+                         "           [--rtmp-port P] [--no-rtmp]\n";
             std::exit(0);
         }
     }
@@ -85,6 +88,17 @@ Config Config::load(int argc, char** argv) {
         read_json(j, "cors_origin", cfg.cors_origin);
         read_json(j, "log_level", cfg.log_level);
         read_json(j, "public_base_url", cfg.public_base_url);
+        read_json(j, "rtmp_enabled", cfg.rtmp_enabled);
+        read_json(j, "rtmp_host", cfg.rtmp_host);
+        read_json(j, "rtmp_port", cfg.rtmp_port);
+        read_json(j, "rtmp_app", cfg.rtmp_app);
+        read_json(j, "live_segment_ms", cfg.live_segment_ms);
+        read_json(j, "live_part_ms", cfg.live_part_ms);
+        read_json(j, "live_window_segments", cfg.live_window_segments);
+        read_json(j, "live_passthrough", cfg.live_passthrough);
+        read_json(j, "live_renditions", cfg.live_renditions);
+        read_json(j, "live_block_timeout_ms", cfg.live_block_timeout_ms);
+        read_json(j, "live_decode_hw", cfg.live_decode_hw);
     }
 
     read_env("VSP_HOST", cfg.host);
@@ -95,8 +109,11 @@ Config Config::load(int argc, char** argv) {
     read_env("VSP_ENCODER", cfg.encoder);
     read_env_int("VSP_JOBS", cfg.concurrent_jobs);
     read_env("VSP_LOG_LEVEL", cfg.log_level);
+    read_env_int("VSP_RTMP_PORT", cfg.rtmp_port);
+    if (const char* v = std::getenv("VSP_RTMP_ENABLED")) cfg.rtmp_enabled = std::string(v) != "0" && std::string(v) != "false";
 
     if (cfg.part_duration_ms > cfg.segment_duration_ms) cfg.part_duration_ms = cfg.segment_duration_ms;
+    if (cfg.live_part_ms > cfg.live_segment_ms) cfg.live_part_ms = cfg.live_segment_ms;
     cfg.data_dir = std::filesystem::absolute(cfg.data_dir);
     return cfg;
 }

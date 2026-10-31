@@ -52,8 +52,9 @@ http::response<http::string_body> json_response(const JsonResponse& jr, unsigned
 
 } // namespace
 
-HttpServer::HttpServer(const Config& cfg, Router& router, EventBroker& broker, asio::io_context& ioc)
-    : cfg_(cfg), router_(router), broker_(broker), ioc_(ioc) {}
+HttpServer::HttpServer(const Config& cfg, Router& router, EventBroker& broker, PlaylistRegistry& playlists,
+                       asio::io_context& ioc)
+    : cfg_(cfg), router_(router), broker_(broker), playlists_(playlists), ioc_(ioc) {}
 
 void HttpServer::start() {
     asio::co_spawn(ioc_, listen(), asio::detached);
@@ -246,6 +247,15 @@ asio::awaitable<void> HttpServer::session(beast::tcp_stream stream) {
                     co_await http::async_write(stream, json_response(file_or.error(), hdr.version(), keep_alive, cfg_),
                                                use_awaitable);
                     break;
+                }
+                // LL-HLS blocking playlist reload
+                if (auto msn = ctx.query.find("_HLS_msn"); msn != ctx.query.end() &&
+                    file_or->extension() == ".m3u8") {
+                    uint64_t n = std::strtoull(msn->second.c_str(), nullptr, 10);
+                    int part = -1;
+                    if (auto p = ctx.query.find("_HLS_part"); p != ctx.query.end()) part = std::atoi(p->second.c_str());
+                    stream.expires_after(30s);
+                    co_await playlists_.wait_for(*file_or, n, part, std::chrono::milliseconds(cfg_.live_block_timeout_ms));
                 }
                 bool reuse = co_await serve_file(stream, hdr, *file_or, cfg_.cors_origin);
                 if (!reuse) co_return;

@@ -4,7 +4,8 @@ High-performance, low-latency video platform for Ubuntu:
 
 - **Backend** — C++23, [GStreamer](https://gstreamer.freedesktop.org/) 1.20+ media core, [Boost.Asio/Beast](https://www.boost.org/doc/libs/release/libs/beast/) coroutine HTTP server, SQLite metadata.
 - **Desktop app** — Electron + React + TypeScript (electron-vite), [hls.js](https://github.com/video-dev/hls.js) player.
-- **Streaming format** — **LL-HLS / CMAF** (fragmented MP4, byte-range partial segments). Content is playable *while it is still being transcoded*.
+- **Streaming format** — **LL-HLS / CMAF** (fragmented MP4, byte-range partial segments, blocking playlist reload). VOD content is playable *while it is still being transcoded*.
+- **Live ingest** — native **RTMP server** (no nginx-rtmp/MediaMTX dependency) → source passthrough + NVENC ABR tiers → LL-HLS with ~2 s glass-to-glass latency, optional record-to-VOD.
 
 ```
 ┌──────────────── desktop (Electron) ────────────────┐      ┌─────────────────── backend (C++) ───────────────────┐
@@ -30,7 +31,15 @@ High-performance, low-latency video platform for Ubuntu:
 - **Server-Sent Events** (`/api/events`) for job progress / video state; crash recovery re-queues interrupted jobs at startup.
 - Configurable through JSON file, CLI flags and `VSP_*` environment variables.
 
+**Live (RTMP → LL-HLS)**
+- Native RTMP ingest written on Boost.Asio coroutines (`src/live/rtmp/`): handshake, chunk-stream demux with extended timestamps, AMF0 commands, acknowledgements, stream-key authentication. Media payloads are assembled straight into GStreamer buffers (one allocation per message, no intermediate FLV file).
+- **Source passthrough**: the incoming H.264 is remuxed into the top rendition without decoding; lower ABR tiers are decoded once (NVDEC when available) and encoded in parallel with the low-latency encoder preset. Publisher keyframe interval = segment length keeps all tiers aligned.
+- Live packaging: 2 s segments / 500 ms parts, `CAN-BLOCK-RELOAD` with server-side `_HLS_msn`/`_HLS_part` holds (responses release the instant the part is written), `EXT-X-PROGRAM-DATE-TIME`, sliding window or full retention when recording.
+- Finished sessions become ready-to-play Videos in the library (recording) or are discarded.
+- Overload protection drops to the next keyframe if encoders fall behind; crash-safe state recovery on restart.
+
 **Desktop**
+- Live view: create stream keys, copy OBS server/key, LIVE badges with inbound bitrate / encode fps / backlog, one-click watch.
 - Drag-and-drop upload wizard with **client-side pre-processing**: metadata probe, scrub-and-capture poster frame, trim in/out with range-bound preview, rendition selection, audio bitrate.
 - Library with thumbnails, live progress bars and a **LIVE PREVIEW** badge the moment a transcode becomes playable.
 - hls.js player in low-latency mode: automatic/manual quality, stats overlay (level, bandwidth estimate, buffer, LL-HLS latency), seamless switch from in-progress EVENT playlist to the final VOD.
@@ -80,6 +89,14 @@ Package the desktop app: `cd desktop && npm run package` (AppImage + deb in `des
 | `audio_bitrate_kbps`             | `128`     | |
 | `cors_origin`                    | `*`       | |
 | `log_level`                      | `info`    | trace/debug/info/warn/error |
+| `rtmp_enabled` / `--no-rtmp`     | `true`    | |
+| `rtmp_port` / `--rtmp-port` / `VSP_RTMP_PORT` | `1935` | |
+| `rtmp_app`                       | `live`    | publishers push to `rtmp://host:1935/live/<stream-key>` |
+| `live_segment_ms` / `live_part_ms` | `2000` / `500` | LL-HLS segment and part length for live |
+| `live_window_segments`           | `10`      | sliding window when the stream is not recorded |
+| `live_passthrough`               | `true`    | top rendition = source H.264 remuxed (no re-encode) |
+| `live_renditions`                | `["720p","480p","360p"]` | encoded ABR tiers (only those below the source height are built) |
+| `live_block_timeout_ms`          | `3000`    | max hold for `_HLS_msn` blocking reloads |
 
 `vsp-server --config config.json` (see `backend/config.example.json`; a `config.json` in the CWD is picked up automatically).
 
@@ -96,7 +113,11 @@ Package the desktop app: `cd desktop && npm run package` (AppImage + deb in `des
 | PATCH / DELETE | `/api/videos/{id}` | edit title/description · delete video + files |
 | POST | `/api/videos/{id}/transcode` | re-transcode (optionally with new `options`) |
 | GET | `/api/jobs` · `/api/jobs/{id}` · POST `/api/jobs/{id}/cancel` | job tracking |
-| GET | `/api/events` | SSE: `video.updated`, `video.deleted`, `job.updated`, `job.progress` |
+| GET / POST | `/api/live` | list streams · create `{name, record, renditions?}` → stream with `stream_key`, `ingest_url` |
+| GET / PATCH / DELETE | `/api/live/{id}` | detail (incl. live `stats`) · edit · delete (when idle) |
+| POST | `/api/live/{id}/key` | rotate the stream key |
+| POST | `/api/live/{id}/stop` | disconnect the publisher |
+| GET | `/api/events` | SSE: `video.updated`, `video.deleted`, `job.updated`, `job.progress`, `live.updated`, `live.deleted`, `live.stats` |
 | GET | `/media/{id}/master.m3u8` | HLS master; renditions at `/media/{id}/v_720p/index.m3u8`, `…/a_128k/index.m3u8` |
 
 `options`: `{ trim_start_ms, trim_end_ms (0 = end), renditions: ["1080p","720p"] (empty = auto), audio_bitrate_kbps (0 = default), keep_source }`.
@@ -111,28 +132,49 @@ curl -s -XPUT "localhost:8080/api/videos/$ID/source" --data-binary @demo.mp4 | j
 curl -s "localhost:8080/api/videos/$ID" | jq '{status, progress, playback_url}'
 ```
 
+## Live streaming (RTMP ingest)
+
+```bash
+# 1. create a stream key
+curl -s -XPOST localhost:8080/api/live -H 'Content-Type: application/json' -d '{"name":"Studio A","record":true}' | jq '{ingest_url, stream_key}'
+# 2. publish from OBS (Settings → Stream → Custom): Server rtmp://<host>:1935/live  Key <stream_key>
+#    or from the command line:
+./scripts/publish-test-stream.sh rtmp://127.0.0.1:1935/live/<stream_key> 120 1920 1080 30 6000
+# 3. watch: /media/<current_video_id>/master.m3u8 (the desktop app's Live view does this)
+```
+
+Encoder settings for the lowest latency: **keyframe interval 2 s** (= `live_segment_ms`), **zerolatency / no B-frames**, CBR. With the defaults (500 ms parts, `PART-HOLD-BACK` = 3 parts) hls.js reports ≈ 2.3 s glass-to-glass; a part is published ≈ 0.5 s after its first frame is captured, and blocking playlist reloads hold exactly until that moment.
+
+What happens per publisher: `RTMP session → FLV tags → appsrc → flvdemux → h264parse → tee` → passthrough `mp4mux` (source tier) and `decodebin3 → videoconvert → tee → N × (scale → encoder → mp4mux)`; AAC audio is remuxed as-is (other codecs are re-encoded). The pipeline is built on the fly when the first video caps arrive so the ABR ladder matches the actual source.
+
+Media is served from `media/<recording-id>/`; when the publisher disconnects the playlists are finalised (`EXT-X-ENDLIST`) and a Video is created if `record` is on, otherwise the directory is removed.
+
+Known interop note: GStreamer's own `hlsdemux2` (≤ 1.28) rejects `EXT-X-PART` lines with the spec-mandated quoted `BYTERANGE` while a stream is live; it plays the finished recordings. hls.js, Safari and ExoPlayer are fine.
+
 ## Output layout
 
 ```
 data/media/<video_id>/
 ├── master.m3u8                # EXT-X-STREAM-INF per video rendition + EXT-X-MEDIA audio group
 ├── thumbnail.jpg
-├── v_1080p/ init.mp4  seg_00001.m4s …  index.m3u8
+├── v_source/ …                # live only: passthrough of the publisher's H.264
+├── v_1080p/ init.mp4  seg_000001.m4s …  index.m3u8
 ├── v_720p/  …
 └── a_128k/  init.mp4  seg_00001.m4s …  index.m3u8
 ```
 
-While transcoding, `index.m3u8` is an `EVENT` playlist carrying `#EXT-X-PART … BYTERANGE` entries for the most recent segments and `#EXT-X-PART-INF` / `#EXT-X-SERVER-CONTROL`; at completion it becomes `VOD` with `#EXT-X-ENDLIST`.
+While transcoding (or live), `index.m3u8` carries `#EXT-X-PART … BYTERANGE` entries for the most recent segments plus `#EXT-X-PART-INF` / `#EXT-X-SERVER-CONTROL` (`CAN-BLOCK-RELOAD=YES` for live); at completion it becomes `VOD` with `#EXT-X-ENDLIST`. Segments always start on a keyframe (`EXT-X-INDEPENDENT-SEGMENTS`); parts may not.
 
 ## Testing
 
 ```bash
 backend/build/vsp-mp4-tests                     # ISOBMFF parser unit tests
+backend/build/vsp-rtmp-tests                    # AMF0 + RTMP chunk-stream unit tests
 ./scripts/make-test-clip.sh .testdata 30        # synthetic 1080p30 clip with audio (no external media)
 ./scripts/verify-hls.sh http://127.0.0.1:8080/media/<id>/master.m3u8 data/media/<id>   # hlsdemux2 playback + decode of every rendition
 ```
 
-`scripts/electron-cdp-check.mjs` / `electron-cdp-upload.mjs` drive the running Electron app over CDP (`npm run dev -- -- --remote-debugging-port=9333`) to assert real playback and the full upload → live preview → VOD flow.
+`scripts/electron-cdp-check.mjs` / `electron-cdp-upload.mjs` / `electron-cdp-live.mjs` drive the running Electron app over CDP (`npm run dev -- -- --remote-debugging-port=9333`) to assert real playback: VOD, the upload → live preview → VOD flow, and RTMP live playback with latency readout. `scripts/publish-test-stream.sh` is a synthetic RTMP publisher.
 
 ## `vsp-probe` — media compatibility scanner
 
@@ -177,18 +219,21 @@ backend/src/
 backend/tools/
   probe_main.cpp   vsp-probe compatibility scanner
   jobs/      worker pool running transcode jobs
-  http/      Beast coroutine server · router · static file serving (Range) · SSE broker · API handlers
+  live/      live_manager (keys, sessions, record-to-VOD) · live_pipeline (FLV → passthrough + ABR → packagers)
+    rtmp/    amf0 · chunk (stream (de)mux) · session (handshake, commands, acks) · server (Asio acceptor)
+  http/      Beast coroutine server · router · static file serving (Range) · SSE broker · playlist_registry (LL-HLS blocking reload) · API handlers
 desktop/src/
   main/      Electron main (window, dialogs)
   preload/   context bridge
-  renderer/  React app: Library · UploadWizard · Player · Jobs · Settings
-scripts/     setup-ubuntu.sh · build-backend.sh · dev.sh · make-test-clip.sh · verify-hls.sh · electron-cdp-*.mjs
+  renderer/  React app: Library · UploadWizard · Live · Player · Jobs · Settings
+scripts/     setup-ubuntu.sh · build-backend.sh · dev.sh · make-test-clip.sh · verify-hls.sh · publish-test-stream.sh · electron-cdp-*.mjs
 ```
 
 ## Roadmap / known limitations (v1)
 
-- No authentication or multi-tenancy; intended for a trusted network.
-- LL-HLS blocking playlist reload (`CAN-BLOCK-RELOAD`, `_HLS_msn`) and `EXT-X-PRELOAD-HINT` are not implemented; players poll the playlist.
+- No authentication beyond RTMP stream keys; no multi-tenancy; intended for a trusted network.
+- `EXT-X-PRELOAD-HINT` and `CAN-SKIP-UNTIL` (delta playlists) are not implemented.
+- RTMP only: RTMPS/TLS, enhanced-RTMP (HEVC/AV1 in FLV), SRT and WHIP ingest are next. Split-essence audio sidecars are not merged.
 - Uploads are single-request (not resumable); disk I/O is synchronous on the HTTP threads (io_uring via `asio::stream_file` is a natural next step).
-- H.264 only; HEVC/AV1 ladders, DASH output, live ingest (RTMP/SRT/WebRTC WHIP) are the next milestones.
+- H.264 only; HEVC/AV1 ladders and DASH output are the next milestones.
 - Interlaced sources are encoded as-is (no deinterlacer in the pipeline yet); >8-bit sources are converted to 8-bit.

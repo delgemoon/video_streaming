@@ -76,6 +76,15 @@ export interface SystemInfo {
   part_duration_ms: number
   audio_bitrate_kbps: number
   ladder: LadderStep[]
+  live?: {
+    enabled: boolean
+    rtmp_port: number
+    rtmp_app: string
+    segment_ms: number
+    part_ms: number
+    passthrough: boolean
+    default_renditions: string[]
+  }
 }
 
 export interface JobProgressEvent {
@@ -85,4 +94,58 @@ export interface JobProgressEvent {
   fps: number
   position_ms: number
   playable: boolean
+}
+
+export type LiveStatus = 'idle' | 'live'
+
+export interface LiveStats {
+  stream_id: string
+  bytes_in: number
+  video_frames: number
+  encode_fps: number
+  queued_bytes: number
+  duration_s: number
+  uptime_s: number
+}
+
+export interface LiveStream {
+  id: string
+  name: string
+  stream_key: string
+  status: LiveStatus
+  record: boolean
+  renditions: string[]
+  current_video_id: string
+  last_video_id: string
+  publisher: string
+  width: number
+  height: number
+  fps: number
+  video_codec: string
+  audio_codec: string
+  live_renditions: Rendition[]
+  playback_url: string
+  started_at: string
+  ended_at: string
+  created_at: string
+  updated_at: string
+  sessions: number
+  error: string
+  ingest_url?: string
+  ingest_server?: string
+  active?: boolean
+  stats?: LiveStats | null
+}
+
+/** Anything the Player can play: a VOD Video or a LiveStream. */
+export interface Playable {
+  id: string
+  title: string
+  playback_url: string
+  live: boolean
+  subtitle?: string
+  renditions: Rendition[]
+  duration_ms?: number
+  status?: string
+  progress?: number
 }

@@ -1,4 +1,4 @@
-import type { Job, SystemInfo, TranscodeOptions, Video } from './types'
+import type { Job, LiveStream, SystemInfo, TranscodeOptions, Video } from './types'
 
 export class ApiError extends Error {
   constructor(
@@ -69,6 +69,24 @@ export class VspClient {
       method: 'POST',
       body: JSON.stringify(options ? { options } : {})
     })
+  }
+  listLive(): Promise<{ streams: LiveStream[]; enabled: boolean }> {
+    return this.json('/api/live')
+  }
+  createLive(data: { name: string; record: boolean; renditions?: string[] }): Promise<LiveStream> {
+    return this.json('/api/live', { method: 'POST', body: JSON.stringify(data) })
+  }
+  updateLive(id: string, data: { name?: string; record?: boolean; renditions?: string[] }): Promise<LiveStream> {
+    return this.json(`/api/live/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+  }
+  rotateLiveKey(id: string): Promise<LiveStream> {
+    return this.json(`/api/live/${id}/key`, { method: 'POST' })
+  }
+  stopLive(id: string): Promise<unknown> {
+    return this.json(`/api/live/${id}/stop`, { method: 'POST' })
+  }
+  deleteLive(id: string): Promise<unknown> {
+    return this.json(`/api/live/${id}`, { method: 'DELETE' })
   }
   listJobs(): Promise<{ jobs: Job[] }> {
     return this.json('/api/jobs')

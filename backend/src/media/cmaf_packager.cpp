@@ -1,5 +1,7 @@
 #include "media/cmaf_packager.hpp"
 
+#include "core/util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -38,6 +40,8 @@ PackagerStats CmafPackager::stats_unlocked() const {
     PackagerStats s;
     s.has_init = init_done_;
     s.codec = track_.codec;
+    s.total_bytes = dropped_bytes_;
+    s.total_duration_s = dropped_duration_s_;
     for (const auto& seg : segments_) {
         s.total_bytes += seg.bytes;
         s.total_duration_s += seg.duration_s;
@@ -46,7 +50,7 @@ PackagerStats CmafPackager::stats_unlocked() const {
             s.peak_bandwidth = std::max(s.peak_bandwidth, bw);
         }
     }
-    s.segment_count = static_cast<unsigned>(segments_.size());
+    s.segment_count = static_cast<unsigned>(segments_.size()) + dropped_segments_;
     if (s.total_duration_s > 0) s.avg_bandwidth = static_cast<unsigned>(s.total_bytes * 8.0 / s.total_duration_s);
     if (s.peak_bandwidth < s.avg_bandwidth) s.peak_bandwidth = s.avg_bandwidth;
     return s;
@@ -122,7 +126,8 @@ void CmafPackager::on_init_complete() {
 void CmafPackager::open_segment() {
     Segment s;
     s.index = next_index_++;
-    s.filename = std::format("seg_{:05}.m4s", s.index);
+    s.filename = std::format("seg_{:06}.m4s", s.index);
+    if (segments_.empty()) media_sequence_ = s.index;
     segments_.push_back(std::move(s));
     seg_file_.open(cfg_.out_dir / segments_.back().filename, std::ios::binary | std::ios::trunc);
 }
@@ -133,6 +138,22 @@ void CmafPackager::close_segment() {
     auto& s = segments_.back();
     s.closed = true;
     max_segment_s_ = std::max(max_segment_s_, s.duration_s);
+    if (cfg_.live && cfg_.window_segments) trim_window();
+}
+
+void CmafPackager::trim_window() {
+    size_t closed = segments_.size() - (segments_.back().closed ? 0 : 1);
+    while (closed > cfg_.window_segments) {
+        const auto& old = segments_.front();
+        dropped_bytes_ += old.bytes;
+        dropped_duration_s_ += old.duration_s;
+        ++dropped_segments_;
+        std::error_code ec;
+        std::filesystem::remove(cfg_.out_dir / old.filename, ec);
+        segments_.erase(segments_.begin());
+        --closed;
+        if (!segments_.empty()) media_sequence_ = segments_.front().index;
+    }
 }
 
 void CmafPackager::on_fragment(const uint8_t* moof, size_t moof_len, const uint8_t* mdat, size_t mdat_len) {
@@ -140,8 +161,21 @@ void CmafPackager::on_fragment(const uint8_t* moof, size_t moof_len, const uint8
     double dur_s = track_.timescale ? static_cast<double>(fi.duration_ticks) / track_.timescale : 0.0;
     if (dur_s <= 0) dur_s = cfg_.part_ms / 1000.0;   // defensive: never emit zero-length parts
 
+    // Segments must start on a keyframe (EXT-X-INDEPENDENT-SEGMENTS), so a segment that has reached
+    // its target length is closed when the *next* independent fragment arrives. Parts inside a
+    // segment may start on any frame. Audio samples are all sync, so audio closes exactly on target.
+    const double target_s = cfg_.segment_ms / 1000.0;
+    const double tol_s = cfg_.part_ms / 2000.0;
+    if (!segments_.empty() && !segments_.back().closed) {
+        const auto& cur = segments_.back();
+        const bool due = cur.duration_s >= target_s - tol_s;
+        const bool force = cur.duration_s >= 2 * target_s;   // publisher keyint longer than 2 segments
+        if ((due && fi.first_sample_is_sync) || force) close_segment();
+    }
     if (segments_.empty() || segments_.back().closed) open_segment();
     auto& seg = segments_.back();
+    // The first fragment completes one fragment-duration after its first frame was captured.
+    if (cfg_.live && !pdt_anchor_ms_) pdt_anchor_ms_ = util::now_ms() - static_cast<int64_t>(dur_s * 1000);
 
     Part p;
     p.offset = seg.bytes;
@@ -159,11 +193,6 @@ void CmafPackager::on_fragment(const uint8_t* moof, size_t moof_len, const uint8
     seg.duration_s += dur_s;
     seg.parts.push_back(p);
     max_part_s_ = std::max(max_part_s_, dur_s);
-
-    // Close once we've reached the target; the half-part tolerance absorbs audio frame granularity.
-    double target_s = cfg_.segment_ms / 1000.0;
-    double tol_s = cfg_.part_ms / 2000.0;
-    if (seg.duration_s >= target_s - tol_s) close_segment();
 
     write_playlist(false);
 }
@@ -196,16 +225,25 @@ void CmafPackager::write_playlist(bool final) {
     std::string pl;
     pl.reserve(256 + segments_.size() * 96);
     pl += "#EXTM3U\n";
+    const bool sliding = cfg_.live && cfg_.window_segments > 0;
     pl += std::format("#EXT-X-VERSION:{}\n", parts_enabled && !final ? 9 : 7);
     pl += std::format("#EXT-X-TARGETDURATION:{}\n", target);
-    pl += std::format("#EXT-X-PLAYLIST-TYPE:{}\n", final ? "VOD" : "EVENT");
+    // A sliding-window live playlist has no PLAYLIST-TYPE; a growing one is EVENT; finished is VOD.
+    if (final && !sliding) pl += "#EXT-X-PLAYLIST-TYPE:VOD\n";
+    else if (!sliding) pl += "#EXT-X-PLAYLIST-TYPE:EVENT\n";
     pl += "#EXT-X-INDEPENDENT-SEGMENTS\n";
-    if (parts_enabled && !final) {
-        pl += std::format("#EXT-X-SERVER-CONTROL:PART-HOLD-BACK={:.3f}\n", part_target * 3);
-        pl += std::format("#EXT-X-PART-INF:PART-TARGET={:.3f}\n", part_target);
+    if (!final) {
+        std::string sc = cfg_.live ? "CAN-BLOCK-RELOAD=YES" : "";
+        if (parts_enabled) sc += std::format("{}PART-HOLD-BACK={:.3f}", sc.empty() ? "" : ",", part_target * 3);
+        if (cfg_.live) sc += std::format(",HOLD-BACK={:.3f}", std::max(3.0 * target, nominal_target * 3));
+        if (!sc.empty()) pl += "#EXT-X-SERVER-CONTROL:" + sc + "\n";
+        if (parts_enabled) pl += std::format("#EXT-X-PART-INF:PART-TARGET={:.3f}\n", part_target);
     }
-    pl += "#EXT-X-MEDIA-SEQUENCE:0\n";
+    pl += std::format("#EXT-X-MEDIA-SEQUENCE:{}\n", media_sequence_);
     pl += "#EXT-X-MAP:URI=\"init.mp4\"\n";
+    if (cfg_.live && pdt_anchor_ms_ && !segments_.empty())
+        pl += std::format("#EXT-X-PROGRAM-DATE-TIME:{}\n",
+                          util::iso8601(pdt_anchor_ms_ + static_cast<int64_t>(dropped_duration_s_ * 1000)));
 
     // LL-HLS: parts are only listed for the last few segments (spec recommends >= 3 target durations).
     const size_t parts_from = segments_.size() > 3 ? segments_.size() - 3 : 0;
@@ -224,6 +262,16 @@ void CmafPackager::write_playlist(bool final) {
     if (final) pl += "#EXT-X-ENDLIST\n";
 
     atomic_write(cfg_.out_dir / "index.m3u8", pl);
+
+    if (cfg_.on_update) {
+        PlaylistUpdate u;
+        u.media_sequence = media_sequence_;
+        u.last_segment = segments_.empty() ? 0 : segments_.back().index;
+        u.last_part = segments_.empty() || segments_.back().parts.empty()
+                          ? 0 : static_cast<unsigned>(segments_.back().parts.size() - 1);
+        u.final = final;
+        cfg_.on_update(cfg_.out_dir / "index.m3u8", u);
+    }
 }
 
 void CmafPackager::atomic_write(const std::filesystem::path& p, const std::string& content) {

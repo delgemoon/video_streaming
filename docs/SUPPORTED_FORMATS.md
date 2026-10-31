@@ -126,9 +126,24 @@ Not yet produced: HEVC/AV1 ladders, DASH manifests, subtitles/WebVTT, multi-audi
 
 ## Live ingest
 
-Not yet implemented. Elements are present for RTMP (`rtmp2src`, `flvdemux`), SRT (`srtsrc`, listener
-mode) and RTSP (`rtspsrc`); WebRTC/WHIP elements are not installed (`gstreamer1.0-plugins-rs`).
-See the roadmap in the [README](../README.md#roadmap--known-limitations-v1).
+| Protocol | Status | Notes |
+|---|---|---|
+| RTMP (publish) | ✅ | Native server on port 1935, `rtmp://host:1935/live/<stream-key>`. Tested with GStreamer `rtmp2sink`; OBS/ffmpeg use the same simple handshake and command set. |
+| RTMPS | ❌ | terminate TLS in front (stunnel/nginx stream) for now |
+| Enhanced RTMP (HEVC/AV1/VP9 FourCC) | ❌ | `flvdemux` support pending |
+| SRT, RTSP, WHIP/WebRTC | ❌ | elements available (`srtsrc`, `rtspsrc`); planned |
+
+Live codecs in FLV:
+
+| Track | Codec | Handling |
+|---|---|---|
+| Video | H.264/AVC | ✅ passthrough tier (remux) + decoded for ABR tiers |
+| Video | VP6, Sorenson H.263, Screen Video | 🟡 decoded and re-encoded only (no passthrough) |
+| Audio | AAC | ✅ remuxed as-is |
+| Audio | MP3, Speex, Nellymoser, ADPCM, PCM | 🟡 decoded and re-encoded to AAC |
+
+Publisher guidance: keyframe interval = live segment length (2 s default), no B-frames / zerolatency, CBR.
+Output is the same LL-HLS/CMAF as VOD with `CAN-BLOCK-RELOAD`, 500 ms parts and `EXT-X-PROGRAM-DATE-TIME`.
 
 ---
 

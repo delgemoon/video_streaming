@@ -107,6 +107,37 @@ nlohmann::json Video::to_json() const {
             {"updated_at", util::iso8601(updated_at)}};
 }
 
+std::string to_string(LiveStatus s) { return s == LiveStatus::Live ? "live" : "idle"; }
+LiveStatus live_status_from_string(const std::string& s) { return s == "live" ? LiveStatus::Live : LiveStatus::Idle; }
+
+nlohmann::json LiveStream::to_json() const {
+    nlohmann::json rends = nlohmann::json::array();
+    for (const auto& r : live_renditions) rends.push_back(r.to_json());
+    return {{"id", id},
+            {"name", name},
+            {"stream_key", stream_key},
+            {"status", to_string(status)},
+            {"record", record},
+            {"renditions", renditions},
+            {"current_video_id", current_video_id},
+            {"last_video_id", last_video_id},
+            {"publisher", publisher},
+            {"width", width},
+            {"height", height},
+            {"fps", fps},
+            {"video_codec", video_codec},
+            {"audio_codec", audio_codec},
+            {"live_renditions", rends},
+            {"playback_url", status == LiveStatus::Live && !current_video_id.empty()
+                                 ? "/media/" + current_video_id + "/master.m3u8" : ""},
+            {"started_at", started_at ? util::iso8601(started_at) : ""},
+            {"ended_at", ended_at ? util::iso8601(ended_at) : ""},
+            {"created_at", util::iso8601(created_at)},
+            {"updated_at", util::iso8601(updated_at)},
+            {"sessions", sessions},
+            {"error", error}};
+}
+
 std::string to_string(JobStatus s) {
     switch (s) {
     case JobStatus::Queued: return "queued";
@@ -318,6 +349,29 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_video ON jobs(video_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+CREATE TABLE IF NOT EXISTS live_streams (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  stream_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'idle',
+  record INTEGER NOT NULL DEFAULT 1,
+  renditions_json TEXT NOT NULL DEFAULT '[]',
+  current_video_id TEXT NOT NULL DEFAULT '',
+  last_video_id TEXT NOT NULL DEFAULT '',
+  publisher TEXT NOT NULL DEFAULT '',
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  fps REAL NOT NULL DEFAULT 0,
+  video_codec TEXT NOT NULL DEFAULT '',
+  audio_codec TEXT NOT NULL DEFAULT '',
+  live_renditions_json TEXT NOT NULL DEFAULT '[]',
+  started_at INTEGER NOT NULL DEFAULT 0,
+  ended_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  sessions INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT ''
+);
 )sql");
 }
 
@@ -431,6 +485,124 @@ std::vector<Job> Database::list_jobs(int limit) {
     std::vector<Job> out;
     while (st.step()) out.push_back(read_job(st));
     return out;
+}
+
+namespace {
+
+constexpr const char* kLiveCols =
+    "id,name,stream_key,status,record,renditions_json,current_video_id,last_video_id,publisher,width,height,fps,"
+    "video_codec,audio_codec,live_renditions_json,started_at,ended_at,created_at,updated_at,sessions,error";
+
+LiveStream read_live(Stmt& st) {
+    LiveStream s;
+    int c = 0;
+    s.id = st.text(c++);
+    s.name = st.text(c++);
+    s.stream_key = st.text(c++);
+    s.status = live_status_from_string(st.text(c++));
+    s.record = st.i64(c++) != 0;
+    auto rj = nlohmann::json::parse(st.text(c++), nullptr, false);
+    if (rj.is_array()) for (const auto& r : rj) if (r.is_string()) s.renditions.push_back(r.get<std::string>());
+    s.current_video_id = st.text(c++);
+    s.last_video_id = st.text(c++);
+    s.publisher = st.text(c++);
+    s.width = static_cast<int>(st.i64(c++));
+    s.height = static_cast<int>(st.i64(c++));
+    s.fps = st.dbl(c++);
+    s.video_codec = st.text(c++);
+    s.audio_codec = st.text(c++);
+    auto lr = nlohmann::json::parse(st.text(c++), nullptr, false);
+    if (lr.is_array()) for (const auto& r : lr) s.live_renditions.push_back(Rendition::from_json(r));
+    s.started_at = st.i64(c++);
+    s.ended_at = st.i64(c++);
+    s.created_at = st.i64(c++);
+    s.updated_at = st.i64(c++);
+    s.sessions = static_cast<int>(st.i64(c++));
+    s.error = st.text(c++);
+    return s;
+}
+
+void bind_live(Stmt& st, const LiveStream& s, int i) {
+    nlohmann::json lr = nlohmann::json::array();
+    for (const auto& r : s.live_renditions) lr.push_back(r.to_json());
+    st.bind(i++, s.name);
+    st.bind(i++, s.stream_key);
+    st.bind(i++, to_string(s.status));
+    st.bind(i++, int64_t{s.record ? 1 : 0});
+    st.bind(i++, nlohmann::json(s.renditions).dump());
+    st.bind(i++, s.current_video_id);
+    st.bind(i++, s.last_video_id);
+    st.bind(i++, s.publisher);
+    st.bind(i++, int64_t{s.width});
+    st.bind(i++, int64_t{s.height});
+    st.bind(i++, s.fps);
+    st.bind(i++, s.video_codec);
+    st.bind(i++, s.audio_codec);
+    st.bind(i++, lr.dump());
+    st.bind(i++, s.started_at);
+    st.bind(i++, s.ended_at);
+    st.bind(i++, s.created_at);
+    st.bind(i++, s.updated_at);
+    st.bind(i++, int64_t{s.sessions});
+    st.bind(i++, s.error);
+}
+
+} // namespace
+
+void Database::insert_live(const LiveStream& s) {
+    std::lock_guard lk(mu_);
+    Stmt st(db_, "INSERT INTO live_streams (id,name,stream_key,status,record,renditions_json,current_video_id,"
+                 "last_video_id,publisher,width,height,fps,video_codec,audio_codec,live_renditions_json,started_at,"
+                 "ended_at,created_at,updated_at,sessions,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    st.bind(1, s.id);
+    bind_live(st, s, 2);
+    st.step();
+}
+
+void Database::update_live(const LiveStream& s) {
+    std::lock_guard lk(mu_);
+    Stmt st(db_, "UPDATE live_streams SET name=?,stream_key=?,status=?,record=?,renditions_json=?,current_video_id=?,"
+                 "last_video_id=?,publisher=?,width=?,height=?,fps=?,video_codec=?,audio_codec=?,"
+                 "live_renditions_json=?,started_at=?,ended_at=?,created_at=?,updated_at=?,sessions=?,error=? "
+                 "WHERE id=?");
+    bind_live(st, s, 1);
+    st.bind(21, s.id);
+    st.step();
+}
+
+std::optional<LiveStream> Database::get_live(const std::string& id) {
+    std::lock_guard lk(mu_);
+    std::string sql = std::string("SELECT ") + kLiveCols + " FROM live_streams WHERE id=?";
+    Stmt st(db_, sql.c_str());
+    st.bind(1, id);
+    if (!st.step()) return std::nullopt;
+    return read_live(st);
+}
+
+std::optional<LiveStream> Database::get_live_by_key(const std::string& key) {
+    std::lock_guard lk(mu_);
+    std::string sql = std::string("SELECT ") + kLiveCols + " FROM live_streams WHERE stream_key=?";
+    Stmt st(db_, sql.c_str());
+    st.bind(1, key);
+    if (!st.step()) return std::nullopt;
+    return read_live(st);
+}
+
+std::vector<LiveStream> Database::list_live() {
+    std::lock_guard lk(mu_);
+    std::string sql = std::string("SELECT ") + kLiveCols + " FROM live_streams ORDER BY created_at DESC";
+    Stmt st(db_, sql.c_str());
+    std::vector<LiveStream> out;
+    while (st.step()) out.push_back(read_live(st));
+    return out;
+}
+
+bool Database::delete_live(const std::string& id) {
+    std::lock_guard lk(mu_);
+    Stmt st(db_, "DELETE FROM live_streams WHERE id=?");
+    st.bind(1, id);
+    st.step();
+    return sqlite3_changes(db_) > 0;
 }
 
 std::vector<Job> Database::unfinished_jobs() {

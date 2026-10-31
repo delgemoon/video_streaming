@@ -33,6 +33,13 @@ public:
     std::vector<Job> list_jobs(int limit = 200);
     std::vector<Job> unfinished_jobs();
 
+    void insert_live(const LiveStream& s);
+    void update_live(const LiveStream& s);
+    std::optional<LiveStream> get_live(const std::string& id);
+    std::optional<LiveStream> get_live_by_key(const std::string& key);
+    std::vector<LiveStream> list_live();
+    bool delete_live(const std::string& id);
+
 private:
     void exec(const char* sql);
     void migrate();

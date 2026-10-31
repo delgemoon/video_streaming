@@ -2,6 +2,7 @@
 
 #include "core/config.hpp"
 #include "http/events.hpp"
+#include "http/playlist_registry.hpp"
 #include "http/router.hpp"
 
 #include <boost/asio/awaitable.hpp>
@@ -17,7 +18,8 @@ namespace vsp {
 // request bodies (uploads never buffer in memory), range-capable static serving and SSE.
 class HttpServer {
 public:
-    HttpServer(const Config& cfg, Router& router, EventBroker& broker, boost::asio::io_context& ioc);
+    HttpServer(const Config& cfg, Router& router, EventBroker& broker, PlaylistRegistry& playlists,
+               boost::asio::io_context& ioc);
 
     void start();
     void stop();
@@ -30,6 +32,7 @@ private:
     const Config& cfg_;
     Router& router_;
     EventBroker& broker_;
+    PlaylistRegistry& playlists_;
     boost::asio::io_context& ioc_;
 };
 

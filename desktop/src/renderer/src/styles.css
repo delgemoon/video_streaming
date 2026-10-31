@@ -141,3 +141,15 @@ input:focus, textarea:focus, .select:focus { outline: none; border-color: var(--
 .stats-overlay { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,.7); padding: 8px 10px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: #cfd6e4; pointer-events: none; }
 .player-error { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: rgba(255,92,108,.9); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 12px; }
 .player-footer { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; flex-wrap: wrap; }
+
+.nav-icon.hot { color: var(--bad); text-shadow: 0 0 8px var(--bad); }
+.row.wrap { flex-wrap: wrap; }
+.live-list { display: flex; flex-direction: column; gap: 12px; }
+.live-card.is-live { border-color: rgba(255,92,108,.45); }
+.ingest { margin: 12px 0 8px; display: flex; flex-direction: column; gap: 4px; }
+.ingest .field { margin: 0; }
+.ingest .field > span { min-width: 80px; }
+.ingest code { background: var(--bg); border: 1px solid var(--border); padding: 3px 8px; border-radius: 6px; }
+.link.small { font-size: 12px; }
+.live-stats { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); margin-bottom: 6px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

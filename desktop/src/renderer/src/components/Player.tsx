@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls, { type Level } from 'hls.js'
 import type { VspClient } from '../lib/api'
-import type { JobProgressEvent, Video } from '../lib/types'
+import type { JobProgressEvent, Playable } from '../lib/types'
 import { fmtBitrate, fmtDuration } from '../lib/format'
 
 interface Props {
   client: VspClient
-  video: Video
+  item: Playable
   progress?: JobProgressEvent
   onClose: () => void
 }
@@ -22,7 +22,7 @@ interface Stats {
   resolution: string
 }
 
-export default function Player({ client, video, progress, onClose }: Props) {
+export default function Player({ client, item: video, progress, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [stats, setStats] = useState<Stats>({
@@ -55,9 +55,11 @@ export default function Player({ client, video, progress, onClose }: Props) {
       debug: localStorage.getItem('vsp.hlsDebug') === '1',
       lowLatencyMode: true,
       enableWorker: true,
-      backBufferLength: 30,
-      maxBufferLength: 20,
-      liveSyncDuration: 3,
+      backBufferLength: video.live ? 10 : 30,
+      maxBufferLength: video.live ? 6 : 20,
+      // Live: honour the playlist's PART-HOLD-BACK (3 parts) instead of a fixed offset.
+      ...(video.live ? {} : { liveSyncDuration: 3 }),
+      liveDurationInfinity: video.live,
       startLevel: -1,
       capLevelToPlayerSize: false
     })
@@ -114,7 +116,7 @@ export default function Player({ client, video, progress, onClose }: Props) {
       hls.destroy()
       hlsRef.current = null
     }
-  }, [src])
+  }, [src, video.live])
 
   // When a processing video finishes, reload so the player picks up the final VOD playlist.
   const wasProcessing = useRef(video.status === 'processing')
@@ -150,10 +152,11 @@ export default function Player({ client, video, progress, onClose }: Props) {
           <div>
             <h2>{video.title}</h2>
             <div className="muted small">
+              {video.live && <span className="live-tag inline">LIVE</span>}
               {video.status === 'processing' && (
-                <span className="live-tag inline">LIVE PREVIEW · transcoding {Math.round((progress?.progress ?? video.progress) * 100)}%</span>
+                <span className="live-tag inline">LIVE PREVIEW · transcoding {Math.round((progress?.progress ?? video.progress ?? 0) * 100)}%</span>
               )}{' '}
-              {video.width}×{video.height} · {fmtDuration(video.duration_ms)} · {video.encoder_used}
+              {video.subtitle}
             </div>
           </div>
           <div className="row gap">
@@ -180,7 +183,7 @@ export default function Player({ client, video, progress, onClose }: Props) {
               <div>buffer: {stats.buffer.toFixed(2)} s</div>
               {stats.live && <div>latency: {stats.latency.toFixed(2)} s (LL-HLS)</div>}
               <div>dropped: {stats.dropped}</div>
-              <div>mode: {stats.live ? 'EVENT (in progress)' : 'VOD'}</div>
+              <div>mode: {video.live ? 'LIVE' : stats.live ? 'EVENT (in progress)' : 'VOD'}</div>
             </div>
           )}
           {error && <div className="player-error">{error}</div>}
@@ -193,6 +196,7 @@ export default function Player({ client, video, progress, onClose }: Props) {
               .filter((r) => r.kind === 'video')
               .map((r) => `${r.name} ${fmtBitrate(r.measured_bandwidth || r.bitrate_kbps * 1000)}`)
               .join(' · ')}
+            {video.duration_ms ? ` · ${fmtDuration(video.duration_ms)}` : ''}
           </span>
         </footer>
       </div>

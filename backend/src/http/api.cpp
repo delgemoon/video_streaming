@@ -74,7 +74,14 @@ void register_routes(Router& r, App& app) {
                                  {"segment_duration_ms", app.cfg.segment_duration_ms},
                                  {"part_duration_ms", app.cfg.part_duration_ms},
                                  {"audio_bitrate_kbps", app.cfg.audio_bitrate_kbps},
-                                 {"ladder", ladder_json()}});
+                                 {"ladder", ladder_json()},
+                                 {"live", {{"enabled", app.live != nullptr},
+                                           {"rtmp_port", app.cfg.rtmp_port},
+                                           {"rtmp_app", app.cfg.rtmp_app},
+                                           {"segment_ms", app.cfg.live_segment_ms},
+                                           {"part_ms", app.cfg.live_part_ms},
+                                           {"passthrough", app.cfg.live_passthrough},
+                                           {"default_renditions", app.cfg.live_renditions}}}});
     });
 
     // ---------- videos ----------
@@ -255,6 +262,88 @@ void register_routes(Router& r, App& app) {
         if (!app.jobs.cancel(ctx.params.at("id")))
             return JsonResponse::error(http::status::not_found, "job not active");
         return JsonResponse::ok({{"cancelled", ctx.params.at("id")}});
+    });
+
+    // ---------- live (RTMP ingest) ----------
+    auto host_of = [](const RequestContext& ctx) {
+        std::string h(ctx.header[http::field::host]);
+        if (auto c = h.rfind(':'); c != std::string::npos && h.find(']') == std::string::npos) h = h.substr(0, c);
+        return h;
+    };
+    auto live_json = [&, host_of](const RequestContext& ctx, const LiveStream& s) {
+        json j = s.to_json();
+        if (app.live) {
+            j["ingest_url"] = app.live->ingest_url(host_of(ctx), s);
+            j["ingest_server"] = app.live->ingest_url(host_of(ctx), s).substr(0, app.live->ingest_url(host_of(ctx), s).rfind('/'));
+            j["active"] = app.live->is_active(s.id);
+            j["stats"] = app.live->live_stats(s.id);
+        }
+        return j;
+    };
+
+    r.add_json(http::verb::get, "/api/live", [&, live_json](const RequestContext& ctx) {
+        json arr = json::array();
+        for (const auto& s : app.db.list_live()) arr.push_back(live_json(ctx, s));
+        return JsonResponse::ok({{"streams", arr}, {"enabled", app.live != nullptr}});
+    });
+
+    r.add_json(http::verb::post, "/api/live", [&, live_json](const RequestContext& ctx) {
+        if (!app.live) return JsonResponse::error(http::status::service_unavailable, "RTMP ingest is disabled");
+        json body = parse_body(ctx);
+        std::vector<std::string> rends;
+        if (body.contains("renditions") && body["renditions"].is_array())
+            for (const auto& x : body["renditions"]) if (x.is_string()) rends.push_back(x.get<std::string>());
+        auto s = app.live->create(util::trim(body.value("name", "")), body.value("record", true), rends);
+        return JsonResponse::created(live_json(ctx, s));
+    });
+
+    r.add_json(http::verb::get, "/api/live/{id}", [&, live_json](const RequestContext& ctx) {
+        auto s = app.db.get_live(ctx.params.at("id"));
+        if (!s) return JsonResponse::error(http::status::not_found, "live stream not found");
+        return JsonResponse::ok(live_json(ctx, *s));
+    });
+
+    r.add_json(http::verb::patch, "/api/live/{id}", [&, live_json](const RequestContext& ctx) {
+        auto s = app.db.get_live(ctx.params.at("id"));
+        if (!s) return JsonResponse::error(http::status::not_found, "live stream not found");
+        json body = parse_body(ctx);
+        if (body.contains("name")) s->name = util::trim(body["name"].get<std::string>());
+        if (body.contains("record")) s->record = body["record"].get<bool>();
+        if (body.contains("renditions") && body["renditions"].is_array()) {
+            s->renditions.clear();
+            for (const auto& x : body["renditions"]) if (x.is_string()) s->renditions.push_back(x.get<std::string>());
+        }
+        s->updated_at = util::now_ms();
+        app.db.update_live(*s);
+        app.broker.publish("live.updated", s->to_json());
+        return JsonResponse::ok(live_json(ctx, *s));
+    });
+
+    r.add_json(http::verb::post, "/api/live/{id}/key", [&, live_json](const RequestContext& ctx) {
+        auto s = app.db.get_live(ctx.params.at("id"));
+        if (!s) return JsonResponse::error(http::status::not_found, "live stream not found");
+        if (app.live && app.live->is_active(s->id))
+            return JsonResponse::error(http::status::conflict, "cannot rotate the key while live");
+        s->stream_key = util::generate_id().substr(0, 24);
+        s->updated_at = util::now_ms();
+        app.db.update_live(*s);
+        app.broker.publish("live.updated", s->to_json());
+        return JsonResponse::ok(live_json(ctx, *s));
+    });
+
+    r.add_json(http::verb::post, "/api/live/{id}/stop", [&](const RequestContext& ctx) {
+        if (!app.live || !app.live->stop(ctx.params.at("id")))
+            return JsonResponse::error(http::status::conflict, "stream is not live");
+        return JsonResponse::ok({{"stopping", ctx.params.at("id")}});
+    });
+
+    r.add_json(http::verb::delete_, "/api/live/{id}", [&](const RequestContext& ctx) {
+        const auto& id = ctx.params.at("id");
+        if (app.live && app.live->is_active(id))
+            return JsonResponse::error(http::status::conflict, "stop the stream before deleting it");
+        if (!app.db.delete_live(id)) return JsonResponse::error(http::status::not_found, "live stream not found");
+        app.broker.publish("live.deleted", {{"id", id}});
+        return JsonResponse::ok({{"deleted", id}});
     });
 
     // ---------- events + media ----------

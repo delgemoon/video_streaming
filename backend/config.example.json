@@ -9,5 +9,13 @@
   "part_duration_ms": 1000,
   "audio_bitrate_kbps": 128,
   "cors_origin": "*",
-  "log_level": "info"
+  "log_level": "info",
+  "rtmp_enabled": true,
+  "rtmp_port": 1935,
+  "rtmp_app": "live",
+  "live_segment_ms": 2000,
+  "live_part_ms": 500,
+  "live_window_segments": 10,
+  "live_passthrough": true,
+  "live_renditions": ["720p", "480p", "360p"]
 }

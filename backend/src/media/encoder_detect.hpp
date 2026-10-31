@@ -28,7 +28,8 @@ EncoderDetection detect_encoders(const std::string& preference);
 
 // Applies bitrate/GOP/latency settings in an encoder-specific way. Properties that don't exist
 // on the installed plugin version are silently skipped.
-void configure_video_encoder(GstElement* enc, const EncoderInfo& info, unsigned bitrate_kbps, int gop_frames);
+void configure_video_encoder(GstElement* enc, const EncoderInfo& info, unsigned bitrate_kbps, int gop_frames,
+                             bool low_latency = false);
 void configure_audio_encoder(GstElement* enc, const std::string& element, unsigned bitrate_kbps);
 
 } // namespace vsp
