@@ -156,6 +156,9 @@ The report ends with a per-codec and per-container tally and a ranked list of fa
 
 ### Broadcast/pro-format support
 
+The full matrix of containers, video/audio codecs and how source properties are handled is in **[docs/SUPPORTED_FORMATS.md](docs/SUPPORTED_FORMATS.md)**.
+
+
 Tested against a 129 GB broadcast test corpus (Avid, Panasonic P2, Sony XDCAM/XDCAM-EX, ARRI, Canon, GoPro, FCP exports — see [docs/editshare-compatibility-report.txt](docs/editshare-compatibility-report.txt)). **614 of 614 video files that probe also decode and transcode**: DNxHD, Apple ProRes, AVC-Intra 50/100 (Avid OP-Atom and P2), XDCAM-HD 422, IMX/D-10, DV/DVCPRO, MPEG-2, uncompressed 4:2:2, H.264 (GoPro/Canon/phones), MJPEG/animation.
 
 Two platform fixes came out of that run and apply to the server as well as the probe:
