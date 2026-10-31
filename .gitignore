@@ -1,0 +1,21 @@
+# Build outputs
+backend/build/
+backend/build-*/
+desktop/out/
+desktop/release/
+desktop/node_modules/
+
+# Runtime data (uploads, transcoded media, SQLite)
+data/
+backend/data/
+.testdata/
+
+# Local config
+backend/config.json
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+*.tsbuildinfo

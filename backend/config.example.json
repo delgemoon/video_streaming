@@ -1,0 +1,13 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "http_threads": 0,
+  "data_dir": "./data",
+  "encoder": "auto",
+  "concurrent_jobs": 0,
+  "segment_duration_ms": 2000,
+  "part_duration_ms": 1000,
+  "audio_bitrate_kbps": 128,
+  "cors_origin": "*",
+  "log_level": "info"
+}
