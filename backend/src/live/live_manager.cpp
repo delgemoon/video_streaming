@@ -1,6 +1,8 @@
 #include "live/live_manager.hpp"
 
 #include "core/util.hpp"
+#include "observability/tracing.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -129,17 +131,20 @@ void LiveManager::publish(const LiveStream& s) { broker_.publish("live.updated",
 std::shared_ptr<rtmp::MediaSink> LiveManager::on_publish(const rtmp::PublishRequest& req, std::string& reason) {
     if (!cfg_.rtmp_app.empty() && req.app != cfg_.rtmp_app) {
         reason = std::format("unknown application '{}' (expected '{}')", req.app, cfg_.rtmp_app);
+        metrics::M().live_sessions_total->with({"rejected"})->inc();
         return nullptr;
     }
     auto stream = db_.get_live_by_key(req.stream_name);
     if (!stream) {
         reason = "unknown stream key";
+        metrics::M().live_sessions_total->with({"rejected"})->inc();
         return nullptr;
     }
     {
         std::lock_guard lk(mu_);
         if (active_.contains(stream->id)) {
             reason = "stream is already live";
+            metrics::M().live_sessions_total->with({"rejected"})->inc();
             return nullptr;
         }
     }
@@ -174,9 +179,15 @@ std::shared_ptr<rtmp::MediaSink> LiveManager::on_publish(const rtmp::PublishRequ
         return nullptr;
     }
 
+    auto span = trace::T().start("live.session", trace::SpanKind::Server);
+    span->set_attribute("stream.id", stream->id);
+    span->set_attribute("stream.name", stream->name);
+    span->set_attribute("publisher", req.remote);
+    span->set_attribute("recording.id", video_id);
     {
         std::lock_guard lk(mu_);
-        active_[stream->id] = Active{pipeline, req, video_id, util::now_ms()};
+        active_[stream->id] = Active{pipeline, req, video_id, util::now_ms(), span};
+        metrics::M().live_streams->get()->set(static_cast<double>(active_.size()));
     }
     stream->status = LiveStatus::Live;
     stream->current_video_id = video_id;
@@ -198,6 +209,17 @@ std::shared_ptr<rtmp::MediaSink> LiveManager::on_publish(const rtmp::PublishRequ
 void LiveManager::on_state(const std::string& id, const LiveInfo& info) {
     auto s = db_.get_live(id);
     if (!s) return;
+    {
+        std::lock_guard lk(mu_);
+        auto it = active_.find(id);
+        if (it != active_.end() && it->second.span && info.master_ready && !it->second.announced) {
+            it->second.span->add_event("master_playlist_published");
+            it->second.span->set_attribute("source.width", static_cast<int64_t>(info.width));
+            it->second.span->set_attribute("source.height", static_cast<int64_t>(info.height));
+            it->second.span->set_attribute("source.fps", info.fps);
+            it->second.announced = true;
+        }
+    }
     s->width = info.width;
     s->height = info.height;
     s->fps = info.fps;
@@ -217,9 +239,19 @@ void LiveManager::on_end(const std::string& id, const std::string& error) {
         if (it == active_.end()) return;
         a = it->second;
         active_.erase(it);
+        metrics::M().live_streams->get()->set(static_cast<double>(active_.size()));
     }
     auto s = db_.get_live(id);
     const int64_t now = util::now_ms();
+    metrics::M().live_sessions_total->with({error.empty() ? "ok" : "error"})->inc();
+    metrics::M().live_session_duration->get()->observe((now - a.started_at) / 1000.0);
+    metrics::M().live_ingest_bitrate->remove({s ? s->name : id});
+    if (a.span) {
+        a.span->set_attribute("duration_s", (now - a.started_at) / 1000.0);
+        if (!error.empty()) a.span->set_status(trace::Status::Error, error);
+        else a.span->set_status(trace::Status::Ok);
+        a.span->end();
+    }
     const auto out_dir = cfg_.media_dir() / a.video_id;
     std::error_code ec;
 
@@ -286,7 +318,13 @@ asio::awaitable<void> LiveManager::stats_loop() {
         }
         for (const auto& id : ids) {
             auto st = live_stats(id);
-            if (!st.is_null()) broker_.publish("live.stats", st);
+            if (!st.is_null()) {
+                broker_.publish("live.stats", st);
+                if (auto s = db_.get_live(id)) {
+                    double bps = st.value("uptime_s", 0.0) > 0 ? st.value("bytes_in", 0.0) * 8 / st.value("uptime_s", 1.0) : 0;
+                    metrics::M().live_ingest_bitrate->with({s->name})->set(bps);
+                }
+            }
         }
     }
 }

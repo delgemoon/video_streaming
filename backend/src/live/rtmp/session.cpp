@@ -1,6 +1,7 @@
 #include "live/rtmp/session.hpp"
 
 #include "core/util.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/post.hpp>
@@ -113,6 +114,8 @@ asio::awaitable<bool> Session::handshake() {
 asio::awaitable<void> Session::run() {
     auto self = shared_from_this();
     spdlog::info("rtmp[{}] connection from {}", id_, remote_);
+    metrics::M().rtmp_connections->get()->inc();
+    struct ConnGauge { ~ConnGauge() { metrics::M().rtmp_connections->get()->dec(); } } conn_gauge;
 
     asio::steady_timer timer(socket_.get_executor());
     bool ok = false;
@@ -126,6 +129,7 @@ asio::awaitable<void> Session::run() {
         ok = co_await handshake();
         timer.cancel();
         if (!ok) {
+            metrics::M().rtmp_errors_total->with({timed_out ? "handshake_timeout" : "handshake"})->inc();
             spdlog::info("rtmp[{}] handshake failed{}", id_, timed_out ? " (timeout)" : "");
             co_return;
         }
@@ -150,9 +154,11 @@ asio::awaitable<void> Session::run() {
         in_len_ += n;
         bytes_in_ += n;
         stat_bytes_.store(bytes_in_, std::memory_order_relaxed);
+        metrics::M().rtmp_bytes_total->get()->inc(static_cast<double>(n));
 
         size_t consumed = reader_.feed(in_.data(), in_len_, error);
         if (!error.empty()) {
+            metrics::M().rtmp_errors_total->with({"protocol"})->inc();
             spdlog::warn("rtmp[{}] protocol error: {}", id_, error);
             break;
         }
@@ -206,6 +212,7 @@ MessageBuffer Session::allocate(const MessageHeader& hdr) {
 void Session::on_message(const MessageHeader& hdr, MessageBuffer buf) {
     if ((hdr.type == kAudio || hdr.type == kVideo) && sink_ && publishing_) {
         stat_msgs_.fetch_add(1, std::memory_order_relaxed);
+        metrics::M().rtmp_messages_total->with({hdr.type == kVideo ? "video" : "audio"})->inc();
         if (hdr.type == kVideo) stat_vts_.store(hdr.timestamp, std::memory_order_relaxed);
         else stat_ats_.store(hdr.timestamp, std::memory_order_relaxed);
         sink_->on_media(hdr.type, hdr.timestamp, buf);
@@ -221,15 +228,18 @@ void Session::on_message(const MessageHeader& hdr, MessageBuffer buf) {
     case kUserControl:
     case kWindowAckSize:
     case kSetPeerBandwidth:
+        metrics::M().rtmp_messages_total->with({"control"})->inc();
         on_control(hdr, d, len);
         break;
     case kCommandAmf0:
+        metrics::M().rtmp_messages_total->with({"command"})->inc();
         on_command(hdr, d, len);
         break;
     case kCommandAmf3:
         if (len > 0) on_command(hdr, d + 1, len - 1);   // AMF3 command messages start with a 0x00 AMF0 marker
         break;
     case kDataAmf0:
+        metrics::M().rtmp_messages_total->with({"data"})->inc();
         on_data_message(hdr, d, len);
         break;
     case kDataAmf3:

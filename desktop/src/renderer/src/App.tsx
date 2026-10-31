@@ -187,7 +187,8 @@ export default function App() {
       </main>
 
       {playing && client && (
-        <Player client={client} item={playing} progress={progress.get(playing.id)} onClose={() => setPlaying(null)} />
+        <Player client={client} item={playing} progress={progress.get(playing.id)} onClose={() => setPlaying(null)}
+                otlpEndpoint={system?.observability?.tracing ? system.observability.otlp_endpoint_public || system.observability.otlp_endpoint : undefined} />
       )}
     </div>
   )

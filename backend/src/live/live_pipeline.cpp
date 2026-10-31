@@ -4,6 +4,7 @@
 #include "media/gst_util.hpp"
 #include "media/ladder.hpp"
 #include "media/transcoder.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -154,6 +155,7 @@ void LivePipeline::start(StateFn on_state, EndFn on_end) {
     if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE)
         throw std::runtime_error("live pipeline refused to start");
     started_ = true;
+    metrics::M().gst_pipelines->with({"live"})->inc();
     bus_thread_ = std::thread([self = shared_from_this()] { self->bus_loop(); });
     spdlog::info("[live {}] pipeline started (segment {}ms, part {}ms, window {}, passthrough {})", cfg_.name,
                  cfg_.segment_ms, cfg_.part_ms, cfg_.window_segments, cfg_.passthrough);
@@ -194,6 +196,11 @@ void LivePipeline::on_media(uint8_t type, uint32_t ts, rtmp::MessageBuffer buf) 
     put32(p + kFlvTagHeader + buf.length, static_cast<uint32_t>(kFlvTagHeader + buf.length));
     gst_buffer_unmap(a->buffer, &a->map);
     bytes_in_ += buf.length;
+    if (type == 9) {
+        const int64_t now = util::now_ms();
+        std::lock_guard lk(mu_);
+        for (auto& b : branches_) b->packager->note_input_arrival(now);
+    }
 
     // Overload protection: if the encoders can't keep up, drop whole tags until the next keyframe
     // rather than letting the backlog (and latency) grow without bound.
@@ -209,6 +216,7 @@ void LivePipeline::on_media(uint8_t type, uint32_t ts, rtmp::MessageBuffer buf) 
             bool key = type == 9 && buf.length > 0 && ((buf.data[0] >> 4) & 0x7) == 1;
             if (key && lvl < kBacklogResumeBytes) dropping = false;
             else {
+                metrics::M().live_dropped_tags_total->with({cfg_.name})->inc();
                 gst_buffer_unref(a->buffer);
                 return;
             }
@@ -613,10 +621,15 @@ void LivePipeline::bus_loop() {
         if (msg) {
             switch (GST_MESSAGE_TYPE(msg)) {
             case GST_MESSAGE_EOS: eos = true; break;
-            case GST_MESSAGE_ERROR: fail(gst::describe_error(msg)); eos = true; break;
+            case GST_MESSAGE_ERROR:
+                metrics::M().gst_errors_total->with({"live"})->inc();
+                fail(gst::describe_error(msg));
+                eos = true;
+                break;
             case GST_MESSAGE_WARNING: {
                 GError* w = nullptr;
                 gst_message_parse_warning(msg, &w, nullptr);
+                metrics::M().gst_warnings_total->with({"live"})->inc();
                 spdlog::warn("[live {}] {}: {}", cfg_.name, GST_OBJECT_NAME(msg->src), w ? w->message : "?");
                 if (w) g_error_free(w);
                 break;
@@ -638,6 +651,13 @@ void LivePipeline::bus_loop() {
             double dt = std::chrono::duration<double>(now - last_tick).count();
             uint64_t f = frames_.load(std::memory_order_relaxed);
             fps_now_.store(static_cast<double>(f - last_frames) / dt);
+            metrics::M().live_encode_fps->with({cfg_.name})->set(fps_now_.load());
+            metrics::M().live_frames_total->with({cfg_.name})->inc(static_cast<double>(f - last_frames));
+            if (appsrc_) {
+                guint64 lvl = 0;
+                g_object_get(appsrc_, "current-level-bytes", &lvl, nullptr);
+                metrics::M().live_backlog_bytes->with({cfg_.name})->set(static_cast<double>(lvl));
+            }
             last_frames = f;
             last_tick = now;
 
@@ -658,6 +678,9 @@ void LivePipeline::bus_loop() {
     }
 
     gst_element_set_state(pipeline_, GST_STATE_NULL);
+    metrics::M().gst_pipelines->with({"live"})->dec();
+    metrics::M().live_encode_fps->remove({cfg_.name});
+    metrics::M().live_backlog_bytes->remove({cfg_.name});
     {
         std::lock_guard lk(mu_);
         for (auto& b : branches_) b->packager->finish();

@@ -9,6 +9,7 @@
 
 #include "media/mp4_box.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -58,6 +59,9 @@ public:
 
     // Thread-safe; called from the GStreamer appsink streaming thread.
     void feed(const uint8_t* data, size_t len);
+    // Live: wall-clock (ms since epoch) at which the newest input media so far arrived at the
+    // server. Used to compute ingest-to-published latency for each part.
+    void note_input_arrival(int64_t wall_ms) { last_input_arrival_ms_.store(wall_ms, std::memory_order_relaxed); }
     // Flushes the current segment, writes the final VOD playlist. Idempotent.
     void finish();
 
@@ -112,6 +116,7 @@ private:
     double dropped_duration_s_ = 0;
     unsigned dropped_segments_ = 0;
     int64_t pdt_anchor_ms_ = 0;       // wall clock of the first fragment (EXT-X-PROGRAM-DATE-TIME)
+    std::atomic<int64_t> last_input_arrival_ms_{0};
     double max_part_s_ = 0;
     double max_segment_s_ = 0;
 };

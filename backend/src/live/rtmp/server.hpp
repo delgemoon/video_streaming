@@ -23,6 +23,7 @@ private:
     uint16_t port_;
     PublishHandler& handler_;
     ServerConfig cfg_;
+    std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
 };
 
 } // namespace vsp::rtmp

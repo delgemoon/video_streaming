@@ -57,10 +57,11 @@ Config Config::load(int argc, char** argv) {
         else if (a == "--log-level") cfg.log_level = next();
         else if (a == "--rtmp-port") cfg.rtmp_port = static_cast<uint16_t>(std::stoi(next()));
         else if (a == "--no-rtmp") cfg.rtmp_enabled = false;
+        else if (a == "--otlp-endpoint") cfg.otlp_endpoint = next();
         else if (a == "--help" || a == "-h") {
             std::cout << "vsp-server [--config file.json] [--host H] [--port P] [--data-dir DIR]\n"
                          "           [--encoder auto|nvenc|vaapi|x264] [--jobs N] [--log-level LVL]\n"
-                         "           [--rtmp-port P] [--no-rtmp]\n";
+                         "           [--rtmp-port P] [--no-rtmp] [--otlp-endpoint http://host:4318/v1/traces]\n";
             std::exit(0);
         }
     }
@@ -99,6 +100,9 @@ Config Config::load(int argc, char** argv) {
         read_json(j, "live_renditions", cfg.live_renditions);
         read_json(j, "live_block_timeout_ms", cfg.live_block_timeout_ms);
         read_json(j, "live_decode_hw", cfg.live_decode_hw);
+        read_json(j, "otlp_endpoint", cfg.otlp_endpoint);
+        read_json(j, "otlp_endpoint_public", cfg.otlp_endpoint_public);
+        read_json(j, "service_name", cfg.service_name);
     }
 
     read_env("VSP_HOST", cfg.host);
@@ -110,6 +114,11 @@ Config Config::load(int argc, char** argv) {
     read_env_int("VSP_JOBS", cfg.concurrent_jobs);
     read_env("VSP_LOG_LEVEL", cfg.log_level);
     read_env_int("VSP_RTMP_PORT", cfg.rtmp_port);
+    read_env("VSP_OTLP_ENDPOINT", cfg.otlp_endpoint);
+    read_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", cfg.otlp_endpoint);
+    read_env("OTEL_SERVICE_NAME", cfg.service_name);
+    read_env("VSP_OTLP_ENDPOINT_PUBLIC", cfg.otlp_endpoint_public);
+    if (cfg.otlp_endpoint_public.empty()) cfg.otlp_endpoint_public = cfg.otlp_endpoint;
     if (const char* v = std::getenv("VSP_RTMP_ENABLED")) cfg.rtmp_enabled = std::string(v) != "0" && std::string(v) != "false";
 
     if (cfg.part_duration_ms > cfg.segment_duration_ms) cfg.part_duration_ms = cfg.segment_duration_ms;

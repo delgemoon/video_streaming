@@ -36,6 +36,10 @@ export default function Settings({ serverUrl, system, online, onChange }: Props)
             <dt>Audio encoder</dt><dd>{system.audio_encoder}</dd>
             <dt>Segment / part</dt><dd>{system.segment_duration_ms} ms / {system.part_duration_ms || 'off'} ms (LL-HLS CMAF)</dd>
             <dt>Audio bitrate</dt><dd>{system.audio_bitrate_kbps} kbps AAC</dd>
+            {system.observability && (<>
+              <dt>Metrics</dt><dd><code>{system.observability.metrics_path}</code> (Prometheus)</dd>
+              <dt>Tracing</dt><dd>{system.observability.tracing ? `OTLP → ${system.observability.otlp_endpoint}` : 'off'}</dd>
+            </>)}
           </dl>
           <h3>Encoder candidates</h3>
           <table className="table compact">

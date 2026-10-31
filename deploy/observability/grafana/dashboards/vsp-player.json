@@ -1,0 +1,732 @@
+{
+ "uid": "vsp-player",
+ "title": "VSP \u00b7 Player QoE",
+ "tags": [
+  "vsp",
+  "player"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "10s",
+ "time": {
+  "from": "now-30m",
+  "to": "now"
+ },
+ "templating": {
+  "list": []
+ },
+ "panels": [
+  {
+   "id": 197,
+   "type": "stat",
+   "title": "Active players",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(vsp_player_sessions) by (mode)",
+     "legendFormat": "{{mode}}",
+     "refId": "R198"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 199,
+   "type": "stat",
+   "title": "Startup p50",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 4,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.5, sum(rate(vsp_player_startup_seconds_bucket[15m])) by (le))",
+     "legendFormat": "",
+     "refId": "R200"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 2
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 201,
+   "type": "stat",
+   "title": "Rebuffers / min",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 8,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(vsp_player_events_total{event=\"rebuffer\"}[5m]))*60",
+     "legendFormat": "",
+     "refId": "R202"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 0.5
+       },
+       {
+        "color": "red",
+        "value": 2
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 203,
+   "type": "stat",
+   "title": "Live latency p90",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.9, sum(rate(vsp_player_live_latency_seconds_bucket[5m])) by (le))",
+     "legendFormat": "",
+     "refId": "R204"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 3
+       },
+       {
+        "color": "red",
+        "value": 5
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 205,
+   "type": "stat",
+   "title": "Errors (1h)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 16,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(increase(vsp_player_events_total{event=~\"error|fatal\"}[1h]))",
+     "legendFormat": "",
+     "refId": "R206"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 207,
+   "type": "stat",
+   "title": "Level switches / min",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 4,
+    "h": 4,
+    "x": 20,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(vsp_player_events_total{event=\"level_switch\"}[5m]))*60",
+     "legendFormat": "",
+     "refId": "R208"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "area",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 209,
+   "type": "row",
+   "title": "Experience",
+   "collapsed": false,
+   "gridPos": {
+    "w": 24,
+    "h": 1,
+    "x": 0,
+    "y": 4
+   },
+   "panels": []
+  },
+  {
+   "id": 211,
+   "type": "timeseries",
+   "title": "Events per minute",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 0,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(vsp_player_events_total[5m])) by (event, mode)*60",
+     "legendFormat": "{{event}} ({{mode}})",
+     "refId": "R210"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 12,
+      "stacking": {
+       "mode": "normal"
+      },
+      "showPoints": "never"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "calcs": [
+      "mean",
+      "max",
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 212,
+   "type": "heatmap",
+   "title": "Startup time",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 12,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(increase(vsp_player_startup_seconds_bucket[5m])) by (le)",
+     "format": "heatmap",
+     "legendFormat": "{{le}}",
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "calculate": false,
+    "yAxis": {
+     "unit": "s"
+    },
+    "color": {
+     "scheme": "Spectral",
+     "mode": "scheme",
+     "reverse": true
+    },
+    "cellGap": 1,
+    "tooltip": {
+     "mode": "single",
+     "yHistogram": true
+    }
+   }
+  },
+  {
+   "id": 213,
+   "type": "heatmap",
+   "title": "Live latency reported by players",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 0,
+    "y": 13
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(increase(vsp_player_live_latency_seconds_bucket[5m])) by (le)",
+     "format": "heatmap",
+     "legendFormat": "{{le}}",
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "calculate": false,
+    "yAxis": {
+     "unit": "s"
+    },
+    "color": {
+     "scheme": "Spectral",
+     "mode": "scheme",
+     "reverse": true
+    },
+    "cellGap": 1,
+    "tooltip": {
+     "mode": "single",
+     "yHistogram": true
+    }
+   }
+  },
+  {
+   "id": 214,
+   "type": "heatmap",
+   "title": "Rebuffer stall length",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 12,
+    "y": 13
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(increase(vsp_player_rebuffer_seconds_bucket[5m])) by (le)",
+     "format": "heatmap",
+     "legendFormat": "{{le}}",
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "calculate": false,
+    "yAxis": {
+     "unit": "s"
+    },
+    "color": {
+     "scheme": "Spectral",
+     "mode": "scheme",
+     "reverse": true
+    },
+    "cellGap": 1,
+    "tooltip": {
+     "mode": "single",
+     "yHistogram": true
+    }
+   }
+  },
+  {
+   "id": 215,
+   "type": "row",
+   "title": "Correlate with server",
+   "collapsed": false,
+   "gridPos": {
+    "w": 24,
+    "h": 1,
+    "x": 0,
+    "y": 21
+   },
+   "panels": []
+  },
+  {
+   "id": 218,
+   "type": "timeseries",
+   "title": "Server part latency vs player latency",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 0,
+    "y": 22
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.95, sum(rate(vsp_live_part_latency_seconds_bucket[1m])) by (le))",
+     "legendFormat": "server part p95",
+     "refId": "R216"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.9, sum(rate(vsp_player_live_latency_seconds_bucket[5m])) by (le))",
+     "legendFormat": "player p90",
+     "refId": "R217"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "stacking": {
+       "mode": "none"
+      },
+      "showPoints": "never"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "calcs": [
+      "mean",
+      "max",
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 221,
+   "type": "timeseries",
+   "title": "Segment serving p99 vs rebuffers",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "w": 12,
+    "h": 8,
+    "x": 12,
+    "y": 22
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.99, sum(rate(vsp_http_request_duration_seconds_bucket{route=~\"/media/.*segment\"}[1m])) by (le))",
+     "legendFormat": "segment p99 (s)",
+     "refId": "R219"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(vsp_player_events_total{event=\"rebuffer\"}[5m]))*60",
+     "legendFormat": "rebuffers/min",
+     "refId": "R220"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "stacking": {
+       "mode": "none"
+      },
+      "showPoints": "never"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "calcs": [
+      "mean",
+      "max",
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  }
+ ],
+ "links": [
+  {
+   "title": "VSP dashboards",
+   "type": "dashboards",
+   "tags": [
+    "vsp"
+   ],
+   "asDropdown": true
+  }
+ ]
+}

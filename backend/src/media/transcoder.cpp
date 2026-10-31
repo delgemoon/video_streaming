@@ -2,6 +2,7 @@
 
 #include "media/cmaf_packager.hpp"
 #include "media/mxf_fixup.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -186,6 +187,8 @@ std::expected<TranscodeResult, std::string> run_transcode(const TranscodeRequest
     gptr<GstElement> pipeline(gst_pipeline_new("transcode"));
     ctx.pipeline = pipeline.get();
     install_mxf_h264_fixup(ctx.pipeline);
+    metrics::M().gst_pipelines->with({"transcode"})->inc();
+    struct PipeGauge { ~PipeGauge() { metrics::M().gst_pipelines->with({"transcode"})->dec(); } } pipe_gauge;
 
     const unsigned part_ms = (req.part_ms == 0 || req.part_ms > req.segment_ms) ? req.segment_ms : req.part_ms;
     double fps = req.probe.fps();
@@ -403,10 +406,14 @@ std::expected<TranscodeResult, std::string> run_transcode(const TranscodeRequest
         if (msg) {
             switch (GST_MESSAGE_TYPE(msg)) {
             case GST_MESSAGE_EOS: eos = true; break;
-            case GST_MESSAGE_ERROR: error = describe_error(msg); break;
+            case GST_MESSAGE_ERROR:
+                error = describe_error(msg);
+                metrics::M().gst_errors_total->with({"transcode"})->inc();
+                break;
             case GST_MESSAGE_WARNING: {
                 GError* w = nullptr;
                 gst_message_parse_warning(msg, &w, nullptr);
+                metrics::M().gst_warnings_total->with({"transcode"})->inc();
                 spdlog::warn("gst warning from {}: {}", GST_OBJECT_NAME(msg->src), w ? w->message : "?");
                 if (w) g_error_free(w);
                 break;

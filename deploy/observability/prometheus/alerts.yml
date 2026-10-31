@@ -1,0 +1,133 @@
+groups:
+  - name: vsp-live
+    rules:
+      - alert: LiveEncoderStalled
+        expr: vsp_live_streams > 0 and on() (sum(vsp_live_encode_fps) == 0)
+        for: 10s
+        labels: { severity: critical }
+        annotations:
+          summary: "Live pipeline produces no frames"
+          description: "{{ $value }} live stream(s) ingesting but encode fps is 0 for 10 s."
+
+      - alert: LiveEncoderBelowRealtime
+        expr: (vsp_live_encode_fps > 0) < 0.9 * (vsp_live_encode_fps offset 1m)
+        for: 20s
+        labels: { severity: warning }
+        annotations:
+          summary: "Live encode fps dropped on {{ $labels.stream }}"
+
+      - alert: LiveBacklogGrowing
+        expr: vsp_live_backlog_bytes > 8 * 1024 * 1024
+        for: 15s
+        labels: { severity: warning }
+        annotations:
+          summary: "Live pipeline backlog {{ $value | humanize1024 }}B on {{ $labels.stream }} — encoders can't keep up"
+
+      - alert: LiveTagsDropped
+        expr: increase(vsp_live_dropped_tags_total[1m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Dropping media under overload on {{ $labels.stream }}"
+
+      - alert: LivePartLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(vsp_live_part_latency_seconds_bucket[1m])) by (le)) > 1.5
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 capture→publish latency {{ $value | printf \"%.2f\" }}s (expected ≈ one part)"
+
+      - alert: RtmpProtocolErrors
+        expr: increase(vsp_rtmp_errors_total[5m]) > 3
+        labels: { severity: warning }
+        annotations:
+          summary: "RTMP errors: {{ $labels.kind }}"
+
+  - name: vsp-transcode
+    rules:
+      - alert: TranscodeFailures
+        expr: increase(vsp_jobs_total{result="failed"}[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} transcode job(s) failed in the last 10 min"
+
+      - alert: TranscodeQueueBacklog
+        expr: vsp_jobs_queued > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} jobs waiting for more than 10 minutes"
+
+      - alert: TranscodeSlow
+        expr: histogram_quantile(0.5, sum(rate(vsp_job_realtime_factor_bucket[30m])) by (le)) < 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Median transcode is slower than realtime (hardware encoder lost?)"
+
+  - name: vsp-http
+    rules:
+      - alert: HttpServerErrors
+        expr: sum(rate(vsp_http_requests_total{status=~"5.."}[5m])) / sum(rate(vsp_http_requests_total[5m])) > 0.01
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "HTTP 5xx rate {{ $value | humanizePercentage }}"
+
+      - alert: MediaLatencyHigh
+        expr: histogram_quantile(0.99, sum(rate(vsp_http_request_duration_seconds_bucket{route=~"/media/.*segment"}[5m])) by (le)) > 0.5
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "p99 segment serving latency {{ $value | printf \"%.2f\" }}s"
+
+      - alert: BlockingReloadTimeouts
+        expr: increase(vsp_hls_blocking_reload_timeouts_total[5m]) > 5
+        labels: { severity: warning }
+        annotations:
+          summary: "LL-HLS blocking reloads timing out — packager not advancing"
+
+      - alert: VspServerDown
+        expr: up{job="vsp-server"} == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "vsp-server is not responding on /metrics"
+
+  - name: vsp-player
+    rules:
+      - alert: PlayerRebuffering
+        expr: sum(rate(vsp_player_events_total{event="rebuffer"}[5m])) > 0.1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Players report {{ $value | printf \"%.2f\" }} rebuffer events/s"
+
+      - alert: PlayerLiveLatencyHigh
+        expr: histogram_quantile(0.9, sum(rate(vsp_player_live_latency_seconds_bucket[5m])) by (le)) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "p90 player live latency {{ $value | printf \"%.1f\" }}s"
+
+  - name: host
+    rules:
+      - alert: GpuEncoderSaturated
+        expr: nvidia_gpu_encoder_utilization_ratio > 0.95
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "NVENC at {{ $value | humanizePercentage }} on GPU {{ $labels.gpu }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) < 0.1
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Root filesystem under 10% free"
+
+      - alert: HighCpu
+        expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Host CPU above 90% for 5 minutes"

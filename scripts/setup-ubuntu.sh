@@ -11,6 +11,13 @@ sudo apt-get install -y -q \
   gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-vaapi \
   libboost-dev libsqlite3-dev nlohmann-json3-dev libspdlog-dev
 
+if [[ "${VSP_WITH_DOCKER:-1}" == "1" ]]; then
+  echo "==> Docker (for the optional observability stack)"
+  sudo apt-get install -y -q docker.io docker-compose-v2
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker "$USER" && echo "   (log out/in for docker group membership; scripts fall back to sudo meanwhile)"
+fi
+
 if [[ "${1:-}" != "--no-node" ]]; then
   if ! command -v node >/dev/null 2>&1; then
     echo "==> Node.js LTS via nvm"

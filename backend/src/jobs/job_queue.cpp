@@ -5,6 +5,8 @@
 #include "media/probe.hpp"
 #include "media/thumbnail.hpp"
 #include "media/transcoder.hpp"
+#include "observability/tracing.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <chrono>
 #include <spdlog/spdlog.h>
@@ -63,6 +65,7 @@ Job JobQueue::enqueue_transcode(const std::string& video_id) {
         std::lock_guard lk(mu_);
         queue_.push_back(job.id);
         cancel_flags_[job.id] = std::make_shared<std::atomic<bool>>(false);
+        metrics::M().jobs_queued->get()->set(static_cast<double>(queue_.size()));
     }
     cv_.notify_one();
     broker_.publish("job.updated", job.to_json());
@@ -77,6 +80,8 @@ bool JobQueue::cancel(const std::string& job_id) {
     auto q = std::find(queue_.begin(), queue_.end(), job_id);
     if (q != queue_.end()) {
         queue_.erase(q);
+        metrics::M().jobs_queued->get()->set(static_cast<double>(queue_.size()));
+        metrics::M().jobs_total->with({"cancelled"})->inc();
         if (auto job = db_.get_job(job_id)) {
             job->status = JobStatus::Cancelled;
             job->finished_at = util::now_ms();
@@ -134,8 +139,10 @@ void JobQueue::worker_loop() {
             if (stopping_) return;
             id = std::move(queue_.front());
             queue_.pop_front();
+            metrics::M().jobs_queued->get()->set(static_cast<double>(queue_.size()));
         }
         ++running_;
+        metrics::M().jobs_running->get()->set(static_cast<double>(running_.load()));
         try {
             run_job(id);
         } catch (const std::exception& e) {
@@ -146,6 +153,8 @@ void JobQueue::worker_loop() {
             }
         }
         --running_;
+        metrics::M().jobs_running->get()->set(static_cast<double>(running_.load()));
+        metrics::M().job_encode_fps->remove({id});
         std::lock_guard lk(mu_);
         cancel_flags_.erase(id);
     }
@@ -153,6 +162,13 @@ void JobQueue::worker_loop() {
 
 void JobQueue::fail_job(Job& job, Video* video, const std::string& error) {
     job.status = error == "cancelled" ? JobStatus::Cancelled : JobStatus::Failed;
+    metrics::M().jobs_total->with({job.status == JobStatus::Cancelled ? "cancelled" : "failed"})->inc();
+    if (job.status == JobStatus::Failed) {
+        // bucket the reason: text before the first ':' keeps cardinality low
+        std::string reason = error.substr(0, error.find(':'));
+        if (reason.size() > 60) reason.resize(60);
+        metrics::M().job_failures_total->with({reason})->inc();
+    }
     job.error = error;
     job.finished_at = util::now_ms();
     db_.update_job(job);
@@ -184,6 +200,13 @@ void JobQueue::run_job(const std::string& job_id) {
         if (!cancel) cancel = cancel_flags_[job_id] = std::make_shared<std::atomic<bool>>(false);
     }
 
+    auto job_span = trace::T().start("transcode.job", trace::SpanKind::Internal);
+    job_span->set_attribute("job.id", job.id);
+    job_span->set_attribute("video.id", video.id);
+    job_span->set_attribute("video.filename", video.original_filename);
+    trace::Scope job_scope(job_span);
+    metrics::Timer total_timer(metrics::M().job_duration->with({"total"}));
+
     job.status = JobStatus::Running;
     job.stage = "probing";
     job.started_at = util::now_ms();
@@ -198,11 +221,26 @@ void JobQueue::run_job(const std::string& job_id) {
     spdlog::info("job {} started for video {} ({})", job.id, video.id, video.original_filename);
 
     // ---- probe
-    auto probe = probe_file(video.source_path);
+    std::expected<ProbeResult, std::string> probe;
+    {
+        auto sp = trace::T().start_child("transcode.probe", job_span);
+        trace::Scope sc(sp);
+        metrics::Timer t(metrics::M().job_duration->with({"probe"}));
+        probe = probe_file(video.source_path);
+        if (!probe) sp->set_status(trace::Status::Error, probe.error());
+    }
     if (!probe) {
+        job_span->set_status(trace::Status::Error, "probe failed");
         fail_job(job, &video, "probe failed: " + probe.error());
         return;
     }
+    job_span->set_attribute("source.width", static_cast<int64_t>(probe->width));
+    job_span->set_attribute("source.height", static_cast<int64_t>(probe->height));
+    job_span->set_attribute("source.duration_s", probe->duration_ms / 1000.0);
+    job_span->set_attribute("source.codec", probe->video_codec);
+    job_span->set_attribute("source.container", probe->container);
+    metrics::M().job_source_duration->get()->observe(probe->duration_ms / 1000.0);
+    metrics::M().job_source_bytes->get()->observe(static_cast<double>(video.size_bytes));
     video.duration_ms = probe->duration_ms;
     video.width = probe->width;
     video.height = probe->height;
@@ -246,6 +284,7 @@ void JobQueue::run_job(const std::string& job_id) {
         job.progress = p.fraction;
         job.fps = p.fps;
         video.progress = p.fraction;
+        metrics::M().job_encode_fps->with({job.id})->set(p.fps);
         broker_.publish("job.progress", {{"job_id", job.id},
                                          {"video_id", video.id},
                                          {"progress", p.fraction},
@@ -265,9 +304,27 @@ void JobQueue::run_job(const std::string& job_id) {
         }
     };
 
-    auto result = run_transcode(req, on_progress, *cancel);
+    std::expected<TranscodeResult, std::string> result;
+    {
+        auto sp = trace::T().start_child("transcode.encode", job_span);
+        sp->set_attribute("encoder", enc_.video.element);
+        sp->set_attribute("renditions", static_cast<int64_t>(req.renditions.size()));
+        trace::Scope sc(sp);
+        metrics::Timer t(metrics::M().job_duration->with({"transcode"}));
+        result = run_transcode(req, on_progress, *cancel);
+        double wall = t.elapsed();
+        int64_t span_ms = (video.options.trim_end_ms > 0 ? video.options.trim_end_ms : probe->duration_ms) -
+                          video.options.trim_start_ms;
+        if (result && wall > 0 && span_ms > 0) {
+            double rtf = span_ms / 1000.0 / wall;
+            metrics::M().job_realtime_factor->get()->observe(rtf);
+            sp->set_attribute("realtime_factor", rtf);
+        }
+        if (!result) sp->set_status(trace::Status::Error, result.error());
+    }
     if (!result) {
         std::filesystem::remove(out_dir / "master.m3u8", ec);
+        job_span->set_status(trace::Status::Error, result.error());
         fail_job(job, &video, result.error());
         return;
     }
@@ -279,6 +336,9 @@ void JobQueue::run_job(const std::string& job_id) {
     video.duration_ms = result->duration_ms > 0 ? result->duration_ms : video.duration_ms;
 
     if (!std::filesystem::exists(out_dir / "thumbnail.jpg")) {
+        auto sp = trace::T().start_child("transcode.thumbnail", job_span);
+        trace::Scope sc(sp);
+        metrics::Timer t(metrics::M().job_duration->with({"thumbnail"}));
         int64_t start = video.options.trim_start_ms;
         int64_t end = video.options.trim_end_ms > 0 ? video.options.trim_end_ms : probe->duration_ms;
         int64_t pos = start + std::max<int64_t>(0, (end - start) / 10);
@@ -297,6 +357,8 @@ void JobQueue::run_job(const std::string& job_id) {
     db_.update_video(video);
     publish_video(video);
 
+    metrics::M().jobs_total->with({"done"})->inc();
+    job_span->set_status(trace::Status::Ok);
     job.status = JobStatus::Done;
     job.progress = 1.0;
     job.stage = "done";

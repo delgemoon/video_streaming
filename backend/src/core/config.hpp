@@ -34,6 +34,11 @@ struct Config {
     unsigned live_block_timeout_ms = 3000;      // max hold for _HLS_msn blocking reloads
     unsigned live_decode_hw = 1;                // prefer hardware decoder for the ABR branch
 
+    // ---- observability
+    std::string otlp_endpoint;                  // e.g. http://127.0.0.1:4318/v1/traces; empty = tracing off
+    std::string otlp_endpoint_public;           // what clients (Electron) should post spans to; defaults to otlp_endpoint
+    std::string service_name = "vsp-server";
+
     std::filesystem::path uploads_dir() const { return data_dir / "uploads"; }
     std::filesystem::path media_dir() const { return data_dir / "media"; }
     std::filesystem::path db_path() const { return data_dir / "vsp.sqlite3"; }

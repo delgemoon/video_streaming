@@ -10,6 +10,9 @@
 #include "http/playlist_registry.hpp"
 #include "media/encoder_detect.hpp"
 #include "media/gst_init.hpp"
+#include "observability/metrics.hpp"
+#include "observability/tracing.hpp"
+#include "observability/vsp_metrics.hpp"
 #include "storage/database.hpp"
 
 #include <boost/asio/io_context.hpp>
@@ -35,6 +38,10 @@ int main(int argc, char** argv) {
 
         EncoderDetection encoders = detect_encoders(cfg.encoder);
         Database db(cfg.db_path());
+
+        metrics::register_process_metrics(metrics::Registry::global());
+        metrics::M().build_info->with({VSP_VERSION, gst_version_string(), encoders.video.element})->set(1);
+        trace::T().configure(cfg.otlp_endpoint, cfg.service_name, VSP_VERSION);
 
         const unsigned threads = cfg.effective_http_threads();
         boost::asio::io_context ioc(static_cast<int>(threads));
@@ -74,6 +81,7 @@ int main(int argc, char** argv) {
 
         if (live) live->shutdown();
         jobs.stop();
+        trace::T().shutdown();
         spdlog::info("bye");
     } catch (const std::exception& e) {
         spdlog::critical("fatal: {}", e.what());

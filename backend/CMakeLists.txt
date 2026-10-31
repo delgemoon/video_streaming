@@ -48,7 +48,10 @@ add_library(vsp_core STATIC
   src/live/rtmp/session.cpp
   src/live/rtmp/server.cpp
   src/live/live_pipeline.cpp
-  src/live/live_manager.cpp)
+  src/live/live_manager.cpp
+  src/observability/metrics.cpp
+  src/observability/vsp_metrics.cpp
+  src/observability/tracing.cpp)
 
 target_include_directories(vsp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vsp_core PUBLIC
@@ -73,8 +76,11 @@ add_executable(vsp-mp4-tests tests/mp4_box_tests.cpp)
 target_link_libraries(vsp-mp4-tests PRIVATE vsp_core)
 add_executable(vsp-rtmp-tests tests/rtmp_tests.cpp)
 target_link_libraries(vsp-rtmp-tests PRIVATE vsp_core)
+add_executable(vsp-metrics-tests tests/metrics_tests.cpp)
+target_link_libraries(vsp-metrics-tests PRIVATE vsp_core)
 enable_testing()
 add_test(NAME mp4_box_tests COMMAND vsp-mp4-tests)
 add_test(NAME rtmp_tests COMMAND vsp-rtmp-tests)
+add_test(NAME metrics_tests COMMAND vsp-metrics-tests)
 
 install(TARGETS vsp-server vsp-probe RUNTIME DESTINATION bin)

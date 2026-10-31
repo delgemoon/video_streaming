@@ -76,6 +76,12 @@ export interface SystemInfo {
   part_duration_ms: number
   audio_bitrate_kbps: number
   ladder: LadderStep[]
+  observability?: {
+    metrics_path: string
+    tracing: boolean
+    otlp_endpoint: string
+    otlp_endpoint_public?: string
+  }
   live?: {
     enabled: boolean
     rtmp_port: number

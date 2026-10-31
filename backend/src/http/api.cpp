@@ -2,6 +2,7 @@
 
 #include "core/util.hpp"
 #include "media/ladder.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <fstream>
 #include <memory>
@@ -75,6 +76,10 @@ void register_routes(Router& r, App& app) {
                                  {"part_duration_ms", app.cfg.part_duration_ms},
                                  {"audio_bitrate_kbps", app.cfg.audio_bitrate_kbps},
                                  {"ladder", ladder_json()},
+                                 {"observability", {{"metrics_path", "/metrics"},
+                                                    {"tracing", !app.cfg.otlp_endpoint.empty()},
+                                                    {"otlp_endpoint", app.cfg.otlp_endpoint},
+                                                    {"otlp_endpoint_public", app.cfg.otlp_endpoint_public}}},
                                  {"live", {{"enabled", app.live != nullptr},
                                            {"rtmp_port", app.cfg.rtmp_port},
                                            {"rtmp_app", app.cfg.rtmp_app},
@@ -344,6 +349,25 @@ void register_routes(Router& r, App& app) {
         if (!app.db.delete_live(id)) return JsonResponse::error(http::status::not_found, "live stream not found");
         app.broker.publish("live.deleted", {{"id", id}});
         return JsonResponse::ok({{"deleted", id}});
+    });
+
+    // ---------- player QoE (pushed by clients, aggregated into Prometheus) ----------
+    r.add_json(http::verb::post, "/api/metrics/player", [&](const RequestContext& ctx) {
+        json body = parse_body(ctx);
+        using namespace vsp::metrics;
+        std::string mode = body.value("mode", "vod") == "live" ? "live" : "vod";
+        if (body.contains("events") && body["events"].is_array()) {
+            for (const auto& e : body["events"]) {
+                std::string type = e.value("type", "");
+                if (type.empty() || type.size() > 32) continue;
+                M().player_events_total->with({type, mode})->inc();
+                if (type == "startup" && e.contains("seconds")) M().player_startup_time->get()->observe(e.value("seconds", 0.0));
+                if (type == "rebuffer" && e.contains("seconds")) M().player_rebuffer_duration->get()->observe(e.value("seconds", 0.0));
+            }
+        }
+        if (mode == "live" && body.contains("latency_s")) M().player_live_latency->get()->observe(body.value("latency_s", 0.0));
+        if (body.contains("active_sessions")) M().player_sessions->with({mode})->set(body.value("active_sessions", 0.0));
+        return JsonResponse::ok({{"ok", true}});
     });
 
     // ---------- events + media ----------

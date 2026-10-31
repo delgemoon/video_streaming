@@ -7,6 +7,7 @@
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <memory>
 #include <thread>
@@ -34,6 +35,7 @@ private:
     EventBroker& broker_;
     PlaylistRegistry& playlists_;
     boost::asio::io_context& ioc_;
+    std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
 };
 
 } // namespace vsp

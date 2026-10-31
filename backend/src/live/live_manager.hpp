@@ -10,6 +10,7 @@
 #include "live/live_pipeline.hpp"
 #include "live/rtmp/sink.hpp"
 #include "media/encoder_detect.hpp"
+#include "observability/tracing.hpp"
 #include "storage/database.hpp"
 
 #include <boost/asio/awaitable.hpp>
@@ -46,6 +47,8 @@ private:
         rtmp::PublishRequest request;
         std::string video_id;
         int64_t started_at = 0;
+        std::shared_ptr<trace::Span> span;
+        bool announced = false;
     };
 
     void on_state(const std::string& stream_id, const LiveInfo& info);

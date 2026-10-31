@@ -1,0 +1,86 @@
+# VSP observability stack: Prometheus + Grafana + Tempo (traces) + exporters.
+#
+#   cd deploy/observability && docker compose up -d
+#   Grafana   http://localhost:3000   (admin / vsp)
+#   Prometheus http://localhost:9090
+#
+# vsp-server must run on the host (it needs the GPU and GStreamer); the containers reach it via
+# host.docker.internal. Start it with tracing enabled:
+#   vsp-server --otlp-endpoint http://127.0.0.1:4318/v1/traces
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: vsp
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus, tempo]
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports: ["3200:3200"]
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./otel/collector.yml:/etc/otel/config.yml:ro
+    ports:
+      - "4318:4318"   # OTLP/HTTP (vsp-server and the Electron app post here)
+      - "4317:4317"   # OTLP/gRPC
+      - "8889:8889"   # collector's own metrics + span metrics
+    depends_on: [tempo]
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+
+  # GPU metrics: gpu/nvidia_smi_exporter.py runs on the *host* (nvidia-smi is glibc-linked and
+  # needs the driver), see scripts/observability-up.sh. Prometheus scrapes it on :9835.
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  tempo-data:

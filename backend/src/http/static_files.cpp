@@ -78,8 +78,8 @@ bool header_keep_alive(const http::request_header<>& req) {
 
 } // namespace
 
-asio::awaitable<bool> serve_file(beast::tcp_stream& stream, const http::request_header<>& req,
-                                 const std::filesystem::path& file, const std::string& cors_origin) {
+asio::awaitable<ServeResult> serve_file(beast::tcp_stream& stream, const http::request_header<>& req,
+                                        const std::filesystem::path& file, const std::string& cors_origin) {
     const bool keep_alive = header_keep_alive(req);
     const bool head = req.method() == http::verb::head;
 
@@ -96,10 +96,10 @@ asio::awaitable<bool> serve_file(beast::tcp_stream& stream, const http::request_
         res.body() = R"({"error":"not found"})";
         res.prepare_payload();
         co_await http::async_write(stream, res, use_awaitable);
-        co_return keep_alive;
+        co_return ServeResult{keep_alive, 404, 0};
     }
     const uint64_t size = f.size(ec);
-    if (ec) co_return false;
+    if (ec) co_return ServeResult{false, 500, 0};
 
     Range range = parse_range(std::string(req[http::field::range]), size);
     if (range.present && !range.valid) {
@@ -108,7 +108,7 @@ asio::awaitable<bool> serve_file(beast::tcp_stream& stream, const http::request_
         res.set(http::field::content_range, std::format("bytes */{}", size));
         res.keep_alive(keep_alive);
         co_await http::async_write(stream, res, use_awaitable);
-        co_return keep_alive;
+        co_return ServeResult{keep_alive, 416, 0};
     }
 
     uint64_t first = 0, last = size ? size - 1 : 0;
@@ -135,27 +135,30 @@ asio::awaitable<bool> serve_file(beast::tcp_stream& stream, const http::request_
     http::response_serializer<http::buffer_body> sr{res};
     stream.expires_after(std::chrono::seconds(30));
     co_await http::async_write_header(stream, sr, use_awaitable);
-    if (head || length == 0) co_return keep_alive;
+    const int status_code = static_cast<int>(status);
+    if (head || length == 0) co_return ServeResult{keep_alive, status_code, 0};
 
     f.seek(first, ec);
-    if (ec) co_return false;
+    if (ec) co_return ServeResult{false, status_code, 0};
 
     std::vector<char> chunk(std::min<uint64_t>(length, 512 * 1024));
     uint64_t remaining = length;
+    uint64_t sent = 0;
     while (remaining > 0) {
         size_t want = static_cast<size_t>(std::min<uint64_t>(chunk.size(), remaining));
         size_t n = f.read(chunk.data(), want, ec);
-        if (ec || n == 0) co_return false;   // file truncated under us: drop connection
+        if (ec || n == 0) co_return ServeResult{false, status_code, sent};   // file truncated under us
         remaining -= n;
+        sent += n;
         res.body().data = chunk.data();
         res.body().size = n;
         res.body().more = remaining > 0;
         stream.expires_after(std::chrono::seconds(30));
         auto [wec, _] = co_await http::async_write(stream, sr, as_tuple(use_awaitable));
         if (wec == http::error::need_buffer) wec = {};
-        if (wec) co_return false;
+        if (wec) co_return ServeResult{false, status_code, sent};
     }
-    co_return keep_alive;
+    co_return ServeResult{keep_alive, status_code, sent};
 }
 
 } // namespace vsp

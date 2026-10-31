@@ -20,3 +20,6 @@ backend/config.json
 .DS_Store
 *.tsbuildinfo
 reports/
+
+# observability runtime files
+deploy/observability/.gpu-exporter.*

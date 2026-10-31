@@ -5,6 +5,7 @@ High-performance, low-latency video platform for Ubuntu:
 - **Backend** — C++23, [GStreamer](https://gstreamer.freedesktop.org/) 1.20+ media core, [Boost.Asio/Beast](https://www.boost.org/doc/libs/release/libs/beast/) coroutine HTTP server, SQLite metadata.
 - **Desktop app** — Electron + React + TypeScript (electron-vite), [hls.js](https://github.com/video-dev/hls.js) player.
 - **Streaming format** — **LL-HLS / CMAF** (fragmented MP4, byte-range partial segments, blocking playlist reload). VOD content is playable *while it is still being transcoded*.
+- **Observability** — Prometheus `/metrics` (55 families, lock-free), OpenTelemetry traces (OTLP/JSON, no SDK dependency), player QoE telemetry, and a one-command Grafana/Tempo/Alertmanager stack with 6 provisioned dashboards and 18 alert rules. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - **Live ingest** — native **RTMP server** (no nginx-rtmp/MediaMTX dependency) → source passthrough + NVENC ABR tiers → LL-HLS with ~2 s glass-to-glass latency, optional record-to-VOD.
 
 ```
@@ -67,6 +68,9 @@ cd desktop && npm install && npm run dev             # Electron, connects to htt
 
 # or both at once
 ./scripts/dev.sh
+
+# optional: Prometheus + Grafana + Tempo
+./scripts/observability-up.sh && backend/build/vsp-server --otlp-endpoint http://127.0.0.1:4318/v1/traces
 ```
 
 If `npm install` leaves `desktop/node_modules/electron/dist` empty (npm ≥ 11 install-script gating), run
@@ -97,6 +101,7 @@ Package the desktop app: `cd desktop && npm run package` (AppImage + deb in `des
 | `live_passthrough`               | `true`    | top rendition = source H.264 remuxed (no re-encode) |
 | `live_renditions`                | `["720p","480p","360p"]` | encoded ABR tiers (only those below the source height are built) |
 | `live_block_timeout_ms`          | `3000`    | max hold for `_HLS_msn` blocking reloads |
+| `otlp_endpoint` / `--otlp-endpoint` | *(off)* | OTLP/HTTP traces endpoint, e.g. `http://127.0.0.1:4318/v1/traces` |
 
 `vsp-server --config config.json` (see `backend/config.example.json`; a `config.json` in the CWD is picked up automatically).
 
@@ -105,6 +110,8 @@ Package the desktop app: `cd desktop && npm run package` (AppImage + deb in `des
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | liveness, selected encoder, queue depth |
+| GET | `/metrics` | Prometheus exposition |
+| POST | `/api/metrics/player` | player QoE batch (startup, rebuffer, level switches, live latency) |
 | GET | `/api/system` | encoder candidates, ladder, packaging settings |
 | POST | `/api/videos` | create: `{title, description, filename, size_bytes, options}` → video + `upload_url` |
 | PUT | `/api/videos/{id}/source` | **streaming** raw body upload; on completion a transcode job is queued |
@@ -170,6 +177,7 @@ While transcoding (or live), `index.m3u8` carries `#EXT-X-PART … BYTERANGE` en
 ```bash
 backend/build/vsp-mp4-tests                     # ISOBMFF parser unit tests
 backend/build/vsp-rtmp-tests                    # AMF0 + RTMP chunk-stream unit tests
+backend/build/vsp-metrics-tests                 # metrics registry / exposition / tracing encoding
 ./scripts/make-test-clip.sh .testdata 30        # synthetic 1080p30 clip with audio (no external media)
 ./scripts/verify-hls.sh http://127.0.0.1:8080/media/<id>/master.m3u8 data/media/<id>   # hlsdemux2 playback + decode of every rendition
 ```
@@ -222,11 +230,13 @@ backend/tools/
   live/      live_manager (keys, sessions, record-to-VOD) · live_pipeline (FLV → passthrough + ABR → packagers)
     rtmp/    amf0 · chunk (stream (de)mux) · session (handshake, commands, acks) · server (Asio acceptor)
   http/      Beast coroutine server · router · static file serving (Range) · SSE broker · playlist_registry (LL-HLS blocking reload) · API handlers
+  observability/  metrics registry + Prometheus exposition · vsp_metrics (all families) · tracing (OTLP/JSON exporter)
 desktop/src/
   main/      Electron main (window, dialogs)
   preload/   context bridge
   renderer/  React app: Library · UploadWizard · Live · Player · Jobs · Settings
-scripts/     setup-ubuntu.sh · build-backend.sh · dev.sh · make-test-clip.sh · verify-hls.sh · publish-test-stream.sh · electron-cdp-*.mjs
+scripts/     setup-ubuntu.sh · build-backend.sh · dev.sh · observability-up.sh · make-test-clip.sh · verify-hls.sh · publish-test-stream.sh · electron-cdp-*.mjs
+deploy/observability/  docker-compose (Prometheus, Grafana, Tempo, otel-collector, Alertmanager, node_exporter) · dashboards generator · alert rules · GPU exporter
 ```
 
 ## Roadmap / known limitations (v1)

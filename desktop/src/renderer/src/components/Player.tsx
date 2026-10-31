@@ -3,12 +3,14 @@ import Hls, { type Level } from 'hls.js'
 import type { VspClient } from '../lib/api'
 import type { JobProgressEvent, Playable } from '../lib/types'
 import { fmtBitrate, fmtDuration } from '../lib/format'
+import { PlayerQoe } from '../lib/qoe'
 
 interface Props {
   client: VspClient
   item: Playable
   progress?: JobProgressEvent
   onClose: () => void
+  otlpEndpoint?: string
 }
 
 interface Stats {
@@ -22,7 +24,7 @@ interface Stats {
   resolution: string
 }
 
-export default function Player({ client, item: video, progress, onClose }: Props) {
+export default function Player({ client, item: video, progress, onClose, otlpEndpoint }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [stats, setStats] = useState<Stats>({
@@ -64,6 +66,8 @@ export default function Player({ client, item: video, progress, onClose }: Props
       capLevelToPlayerSize: false
     })
     hlsRef.current = hls
+    const qoe = new PlayerQoe({ client, mode: video.live ? 'live' : 'vod', itemId: video.id, otlpEndpoint })
+    qoe.attach(hls, el, Hls)
     hls.attachMedia(el)
     hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(src))
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -113,10 +117,11 @@ export default function Player({ client, item: video, progress, onClose }: Props
 
     return () => {
       clearInterval(timer)
+      void qoe.stop()
       hls.destroy()
       hlsRef.current = null
     }
-  }, [src, video.live])
+  }, [src, video.live, video.id, client, otlpEndpoint])
 
   // When a processing video finishes, reload so the player picks up the final VOD playlist.
   const wasProcessing = useRef(video.status === 'processing')

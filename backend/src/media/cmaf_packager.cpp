@@ -1,6 +1,7 @@
 #include "media/cmaf_packager.hpp"
 
 #include "core/util.hpp"
+#include "observability/vsp_metrics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -138,6 +139,9 @@ void CmafPackager::close_segment() {
     auto& s = segments_.back();
     s.closed = true;
     max_segment_s_ = std::max(max_segment_s_, s.duration_s);
+    const char* mode = cfg_.live ? "live" : "vod";
+    metrics::M().packager_segments_total->with({mode})->inc();
+    metrics::M().packager_segment_duration->with({mode})->observe(s.duration_s);
     if (cfg_.live && cfg_.window_segments) trim_window();
 }
 
@@ -193,6 +197,20 @@ void CmafPackager::on_fragment(const uint8_t* moof, size_t moof_len, const uint8
     seg.duration_s += dur_s;
     seg.parts.push_back(p);
     max_part_s_ = std::max(max_part_s_, dur_s);
+    {
+        const char* mode = cfg_.live ? "live" : "vod";
+        metrics::M().packager_parts_total->with({mode})->inc();
+        metrics::M().packager_bytes_total->with({mode})->inc(static_cast<double>(p.size));
+        if (cfg_.live) {
+            // ingest-to-published latency: the newest input that could be in this part arrived at
+            // last_input_arrival_ms_; the part is on disk now. Covers demux/decode/encode/mux/write.
+            int64_t arrived = last_input_arrival_ms_.load(std::memory_order_relaxed);
+            if (arrived) {
+                double lat = static_cast<double>(util::now_ms() - arrived) / 1000.0;
+                if (lat >= 0 && lat < 60) metrics::M().live_part_latency->get()->observe(lat);
+            }
+        }
+    }
 
     write_playlist(false);
 }
@@ -275,6 +293,7 @@ void CmafPackager::write_playlist(bool final) {
 }
 
 void CmafPackager::atomic_write(const std::filesystem::path& p, const std::string& content) {
+    metrics::Timer t(metrics::M().packager_write_duration->get());
     auto tmp = p;
     tmp += ".tmp";
     {

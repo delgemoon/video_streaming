@@ -1,0 +1,19 @@
+global:
+  resolve_timeout: 2m
+
+route:
+  receiver: default
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+
+receivers:
+  - name: default
+    # Alerts are visible in the Alertmanager UI (:9093) and Grafana. Add a webhook/Slack/email
+    # receiver here to be notified, e.g.:
+    # webhook_configs:
+    #   - url: http://host.docker.internal:8080/api/alerts   (not implemented)
+    # slack_configs:
+    #   - api_url: https://hooks.slack.com/services/...
+    #     channel: "#vsp-alerts"
